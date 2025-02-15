@@ -63,6 +63,10 @@ KF_UNCAP               | false                         | uncap the frame rate
 KF_UNSECURE            | false                         | disable VAC (Valve Anti-Cheat)
 KF_WEBADMIN            | false                         | enable WebAdmin panel
 KF_WEBADMINPORT        | 8075                          | WebAdmin TCP port
+STEAMACC_PASSWORD      |                               | password of the steam account
+STEAMACC_USERNAME      | anonymous                     | username of the steam account
+STEAMCMD_ROOT          | ~/steamcmd                    | directory where steamcmd will be stored
+STEAMCMD_APPINSTALLDIR | ~/gameserver                  | directory where the gameserver files will be stored
 
 </details>
 

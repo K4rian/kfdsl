@@ -1,0 +1,21 @@
+services:
+  kfdsl:
+    image: k4rian/kfdsl:latest
+    container_name: kfdsl
+    hostname: kfdsl
+    env_file:
+      - kfdsl.env
+    volumes:
+      - kf1-gamefiles:/home/steam/gameserver
+      - /etc/localtime:/etc/localtime:ro
+    ports:
+      - 7707:7707/udp
+      - 7708:7708/udp
+      - 8075:8075/tcp
+      - 20560:20560/udp
+      - 28852:28852/tcp
+      - 28852:28852/udp
+    restart: unless-stopped
+
+volumes:
+  kf1-gamefiles:

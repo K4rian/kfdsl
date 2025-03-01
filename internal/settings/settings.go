@@ -9,6 +9,7 @@ import (
 )
 
 type KFDSLSettings struct {
+	DependencyFile       *arguments.Argument[string]  // File defining which dependencies to install
 	ConfigFile           *arguments.Argument[string]  // Server Configuration File
 	ServerName           *arguments.Argument[string]  // Server Name
 	ShortName            *arguments.Argument[string]  // Server Alias
@@ -53,8 +54,6 @@ type KFDSLSettings struct {
 	KFPBuyEverywhere     *arguments.Argument[bool]    // KFPatcher: Allows opening the buy menu anywhere (untested)
 	KFPEnableAllTraders  *arguments.Argument[bool]    // KFPatcher: All of the trader's spots are accessible after each wave
 	KFPAllTradersMessage *arguments.Argument[string]  // KFPatcher: All traders open message
-	KFPatcherURL         *arguments.Argument[string]  // KFPatcher: archive URL
-	KFUnflectURL         *arguments.Argument[string]  // KFPatcher: KFUnflect URL
 	LogToFile            *arguments.Argument[bool]    // Enable file logging
 	LogLevel             *arguments.Argument[string]  // Log level (info, debug, warn, error)
 	LogFile              *arguments.Argument[string]  // Log file path

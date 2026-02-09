@@ -50,6 +50,7 @@ func FileMatchesChecksum(filename, checksum string) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("failed to open source file: %w", err)
 	}
+	defer file.Close()
 
 	hash, err := FileChecksum(file, checksumDetails[0])
 	if err != nil {
@@ -168,6 +169,10 @@ func DownloadFile(url, checksum string) (string, error) {
 		return filename, err
 	}
 	defer response.Body.Close()
+
+	if response.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("failed to download %s: HTTP %d", url, response.StatusCode)
+	}
 
 	_, err = io.Copy(out, response.Body)
 	if err != nil {

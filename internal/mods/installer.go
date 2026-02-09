@@ -2,6 +2,7 @@ package mods
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -38,12 +39,10 @@ type Mod struct {
 	Enabled      bool          `json:"enabled,omitempty"`
 }
 
-type installError struct {
+type installResult struct {
 	name string
 	err  error
 }
-
-var mu sync.Mutex
 
 func (m *Mod) isDownloadRequired(dir string) bool {
 	for _, item := range m.InstallItems {
@@ -150,80 +149,123 @@ func (m *Mod) install(dir string, name string) error {
 	return nil
 }
 
-func (m *Mod) resolveDependencies(mods map[string]*Mod) []string {
-	if m.DependOn == nil {
+func (m *Mod) resolveDependencies(allMods map[string]*Mod, visited map[string]bool) []string {
+	if len(m.DependOn) == 0 {
 		return nil
 	}
 
-	deps := make([]string, 0)
+	var deps []string
 	for _, name := range m.DependOn {
-		if dep, ok := mods[name]; ok {
-			// Enable mod for installation if it is a dependency
-			dep.Enabled = true
-			deps = append(deps, dep.resolveDependencies(mods)...)
-		} else {
-			log.Logger.Warn("Dependency not found", "name", name)
+		if visited[name] {
+			log.Logger.Warn("Circular dependency detected, skipping", "name", name)
+			continue
 		}
+		dep, ok := allMods[name]
+		if !ok {
+			log.Logger.Warn("Dependency not found", "name", name)
+			continue
+		}
+		visited[name] = true
+		dep.Enabled = true
+		deps = append(deps, name)
+		deps = append(deps, dep.resolveDependencies(allMods, visited)...)
 	}
 	return deps
 }
 
-func resolveModsToInstall(mods map[string]*Mod) []string {
-	m := make([]string, 0)
-	for name, mod := range mods {
+func resolveModsToInstall(allMods map[string]*Mod) []string {
+	var m []string
+	for name, mod := range allMods {
+		if !mod.Enabled {
+			continue
+		}
+		visited := map[string]bool{name: true}
+		deps := mod.resolveDependencies(allMods, visited)
+		m = append(m, deps...)
 		m = append(m, name)
-		m = append(m, mod.resolveDependencies(mods)...)
 	}
 	return utils.RemoveDuplicates(m)
 }
 
-func InstallMods(dir string, mods map[string]*Mod, installed *[]string) error {
-	toInstall := resolveModsToInstall(mods)
-	log.Logger.Debug("Mods to install", "mods", strings.Join(toInstall, " / "))
-
-	var installWg, processWg sync.WaitGroup
-	installations := make(chan string, len(toInstall))
-	errors := make(chan installError, len(toInstall))
-
+// buildInstallWaves groups mods into waves where each wave's mods
+// have all their dependencies satisfied by previous waves.
+func buildInstallWaves(modList map[string]*Mod, toInstall []string) [][]string {
+	remaining := make(map[string]bool)
 	for _, name := range toInstall {
-		mod := mods[name]
-
-		installWg.Add(1)
-		go func(name string, mod *Mod) {
-			defer installWg.Done()
-
-			err := mod.install(dir, name)
-			if err != nil {
-				errors <- installError{name, err}
-			} else {
-				installations <- name
-			}
-		}(name, mod)
+		remaining[name] = true
 	}
 
-	processWg.Add(1)
-	go func() {
-		defer processWg.Done()
-		for installedMod := range installations {
-			mu.Lock()
-			*installed = append(*installed, installedMod)
-			mu.Unlock()
+	var waves [][]string
+	for len(remaining) > 0 {
+		var wave []string
+		for _, name := range toInstall {
+			if !remaining[name] {
+				continue
+			}
+			mod := modList[name]
+			ready := true
+			for _, dep := range mod.DependOn {
+				if remaining[dep] {
+					ready = false
+					break
+				}
+			}
+			if ready {
+				wave = append(wave, name)
+			}
 		}
-	}()
-
-	processWg.Add(1)
-	go func() {
-		defer processWg.Done()
-		for err := range errors {
-			log.Logger.Error("Failed to install mod", "name", err.name, "error", err.err)
+		if len(wave) == 0 {
+			// Unresolvable deps — break to avoid infinite loop
+			for name := range remaining {
+				wave = append(wave, name)
+			}
 		}
-	}()
+		for _, name := range wave {
+			delete(remaining, name)
+		}
+		waves = append(waves, wave)
+	}
+	return waves
+}
 
-	installWg.Wait()
-	close(installations)
-	close(errors)
-	processWg.Wait()
+func InstallMods(dir string, modList map[string]*Mod, installed *[]string) error {
+	toInstall := resolveModsToInstall(modList)
+	log.Logger.Debug("Mods to install", "mods", strings.Join(toInstall, " / "))
 
+	waves := buildInstallWaves(modList, toInstall)
+	var allErrs []error
+
+	for i, wave := range waves {
+		log.Logger.Debug("Installing mod wave", "wave", i+1, "mods", strings.Join(wave, " / "))
+
+		results := make(chan installResult, len(wave))
+		var wg sync.WaitGroup
+
+		for _, name := range wave {
+			mod := modList[name]
+			wg.Add(1)
+			go func(name string, mod *Mod) {
+				defer wg.Done()
+				results <- installResult{name, mod.install(dir, name)}
+			}(name, mod)
+		}
+
+		wg.Wait()
+		close(results)
+
+		for r := range results {
+			if r.err != nil {
+				log.Logger.Error("Failed to install mod", "name", r.name, "error", r.err)
+				allErrs = append(allErrs, fmt.Errorf("%s: %w", r.name, r.err))
+			} else {
+				*installed = append(*installed, r.name)
+			}
+		}
+	}
+
+	if len(allErrs) > 0 {
+		return errors.Join(allErrs...)
+	}
 	return nil
 }
 

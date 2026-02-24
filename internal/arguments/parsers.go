@@ -160,6 +160,7 @@ func ParseGameDifficulty(raw string) func(a *Argument[int]) (int, error) {
 		return val, err
 	}
 }
+
 func ParseGameLength(raw string) func(a *Argument[int]) (int, error) {
 	lengths := map[string]int{
 		"short":  0,

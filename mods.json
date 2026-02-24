@@ -1,0 +1,76 @@
+{
+    "KFUnflect": {
+        "version": "1.0.0",
+        "description": "Source of dark magic mods.",
+        "authors": [
+            {
+                "name": "InsultingPros",
+                "website": "https://insultingpros.github.io/"
+            }
+        ],
+        "license": "MIT",
+        "project_url": "https://github.com/InsultingPros/KFUnflect",
+        "download_url": "https://github.com/InsultingPros/KFUnflect/releases/download/1.0.0/KFUnflect.u",
+        "checksum": "sha256:b07b6793e7fd38d79be178c4485bdec68e4738bc50f427e28ced8054982a742f",
+        "extract": false,
+        "install": [
+            {
+                "name": "KFUnflect.u",
+                "path": "System",
+                "type": "file",
+                "checksum": "sha256:b07b6793e7fd38d79be178c4485bdec68e4738bc50f427e28ced8054982a742f"
+            }
+        ],
+        "depend_on": []
+    },
+    "KFPatcher": {
+        "version": "1.4.0",
+        "description": "Killing Floor 1 serverside fixes and QoL additions. Forked by K4rian.",
+        "authors": [
+            {
+                "name": "InsultingPros",
+                "website": "https://insultingpros.github.io/"
+            }
+        ],
+        "license": "GPL-3.0",
+        "project_url": "https://github.com/InsultingPros/KFPatcher",
+        "download_url": "https://github.com/K4rian/KFPatcher/releases/download/1.4.x/KFPatcher.zip",
+        "checksum": "sha256:881a58f976e0148b2330ae034cc493c2515c1f96dfd583b52e74039b701e1663",
+        "extract": true,
+        "install": [
+            {
+                "name": "KFPatcher.int",
+                "path": "System",
+                "type": "file",
+                "checksum": "sha256:93761161c10fc38ae0381f3fd86e8357181292e1681dc32745d7f5b18185c6db"
+            },
+            {
+                "name": "KFPatcher.u",
+                "path": "System",
+                "type": "file",
+                "checksum": "sha256:713048e0d30f9bc95a0671649b3c40f5826f2c89f2dad4c9b5c472e8eb4ee798"
+            },
+            {
+                "name": "KFPatcher.ucl",
+                "path": "System",
+                "type": "file",
+                "checksum": "sha256:65da728bf58f2f2872473c19d274fd68771abbd74f3808466597dcf78c0fdb5a"
+            },
+            {
+                "name": "KFPatcherFuncs.ini",
+                "path": "System",
+                "type": "file",
+                "checksum": "sha256:ca616ac2c5c27b9cb8f0a6910a185a648ced683155e4730a859216c8b7981aec"
+            },
+            {
+                "name": "KFPatcherSettings.ini",
+                "path": "System",
+                "type": "file"
+            }
+        ],
+        "depend_on": [
+            "KFUnflect"
+        ],
+        "enabled": true
+    }
+}

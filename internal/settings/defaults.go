@@ -2,6 +2,7 @@ package settings
 
 const (
 	DefaultConfigFile           = "KillingFloor.ini"
+	DefaultModsFile             = "mods.json"
 	DefaultServerName           = "Killing Floor Server"
 	DefaultShortName            = "KF Server"
 	DefaultGamePort             = 7707
@@ -61,9 +62,4 @@ const (
 	DefaultInternalGameLength     = 0
 	DefaultInternalSpecimenType   = "ET_None"
 	DefaultMaxInternetClientRate  = 10000
-)
-
-const (
-	DefaultKFUnflectURL = "https://github.com/InsultingPros/KFUnflect/releases/download/1.0.0/KFUnflect.u"
-	DefaultKFPatcherURL = "https://github.com/InsultingPros/KFPatcher/releases/download/1.4.0/KFPatcher.zip"
 )

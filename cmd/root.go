@@ -22,10 +22,10 @@ func BuildRootCommand() *cobra.Command {
 
 	var userHome, _ = os.UserHomeDir()
 
-	var configFile, serverName, shortName, gameMode, startupMap, gameDifficulty, gameLength,
-		password, adminName, adminMail, adminPassword, motd, specimenType, mutators,
-		serverMutators, redirectURL, mapList, allTradersMessage, kfunflectURL, kfpatcherURL,
-		logLevel, logFilePath, logFileFormat, steamRootDir, steamAppInstallDir string
+	var configFile, modsFile, serverName, shortName, gameMode, startupMap, gameDifficulty,
+		gameLength, password, adminName, adminMail, adminPassword, motd, specimenType, mutators,
+		serverMutators, redirectURL, mapList, allTradersMessage, logLevel, logFilePath,
+		logFileFormat, steamRootDir, steamAppInstallDir string
 
 	var gamePort, webadminPort, gamespyPort, maxPlayers, maxSpectators, region,
 		mapVoteRepeatLimit, logMaxSize, logMaxBackups, logMaxAge int
@@ -42,6 +42,7 @@ func BuildRootCommand() *cobra.Command {
 		Desc    string
 		Default interface{}
 	}{
+		"mods":                   {&modsFile, "mods file", settings.DefaultModsFile},
 		"config":                 {&configFile, "configuration file", settings.DefaultConfigFile},
 		"servername":             {&serverName, "server name", settings.DefaultServerName},
 		"shortname":              {&shortName, "server short name", settings.DefaultShortName},
@@ -86,8 +87,6 @@ func BuildRootCommand() *cobra.Command {
 		"buyeverywhere":          {&enableBuyEverywhere, "(KFPatcher) allow players to shop whenever", settings.DefaultKFPBuyEverywhere},
 		"alltraders":             {&enableAllTraders, "(KFPatcher) make all trader's spots accessible", settings.DefaultKFPEnableAllTraders},
 		"alltraders-message":     {&allTradersMessage, "(KFPatcher) All traders screen message", settings.DefaultKFPAllTradersMessage},
-		"kfunflect-url":          {&kfunflectURL, "(KFPatcher) KFUnflect URL", settings.DefaultKFUnflectURL},
-		"kfpatcher-url":          {&kfpatcherURL, "(KFPatcher) archive URL", settings.DefaultKFPatcherURL},
 		"log-to-file":            {&enableFileLogging, "enable file logging", settings.DefaultLogToFile},
 		"log-level":              {&logLevel, "log level (info, debug, warn, error)", settings.DefaultLogLevel},
 		"log-file":               {&logFilePath, "log file path", settings.DefaultLogFile},
@@ -154,6 +153,7 @@ func runRootCommand(cmd *cobra.Command, args []string) error {
 
 func registerArguments(sett *settings.KFDSLSettings) {
 	sett.ConfigFile = arguments.NewArgument("Config File", viper.GetString("config"), nil, nil, false)
+	sett.ModsFile = arguments.NewArgument("Mods File", viper.GetString("mods"), nil, nil, false)
 	sett.ServerName = arguments.NewArgument("Server Name", viper.GetString("servername"), arguments.ParseNonEmptyStr, nil, false)
 	sett.ShortName = arguments.NewArgument("Short Name", viper.GetString("shortname"), arguments.ParseNonEmptyStr, nil, false)
 	sett.GamePort = arguments.NewArgument("Game Port", viper.GetInt("port"), arguments.ParsePort, nil, false)
@@ -197,8 +197,6 @@ func registerArguments(sett *settings.KFDSLSettings) {
 	sett.KFPBuyEverywhere = arguments.NewArgument("KFP Buy Everywhere", viper.GetBool("buyeverywhere"), nil, arguments.FormatBool, false)
 	sett.KFPEnableAllTraders = arguments.NewArgument("KFP All Traders", viper.GetBool("alltraders"), nil, arguments.FormatBool, false)
 	sett.KFPAllTradersMessage = arguments.NewArgument("KFP All Traders Msg", viper.GetString("alltraders-message"), nil, nil, false)
-	sett.KFPatcherURL = arguments.NewArgument("KFPatcher URL", viper.GetString("kfpatcher-url"), arguments.ParseURL, nil, false)
-	sett.KFUnflectURL = arguments.NewArgument("KFUnflect URL", viper.GetString("kfunflect-url"), arguments.ParseURL, nil, false)
 	sett.LogToFile = arguments.NewArgument("Log to File", viper.GetBool("log-to-file"), nil, arguments.FormatBool, false)
 	sett.LogLevel = arguments.NewArgument("Log Level", viper.GetString("log-level"), arguments.ParseLogLevel, nil, false)
 	sett.LogFile = arguments.NewArgument("Log File", viper.GetString("log-file"), nil, nil, false)

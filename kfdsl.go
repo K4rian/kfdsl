@@ -184,23 +184,17 @@ func extractDefaultConfigFile(filename string, filePath string) error {
 func updateConfigFile(sett *settings.KFDSLSettings) error {
 	kfiFileName := sett.ConfigFile.Value()
 	kfiFilePath := filepath.Join(viper.GetString("steamcmd-appinstalldir"), "System", kfiFileName)
-	tmEnabled := strings.Contains(strings.ToLower(sett.GameMode.Value()), "toygameinfo")
+
+	useObjectiveMode := strings.Contains(strings.ToLower(sett.GameMode.Value()), "storygameinfo")
+	useToyMasterMode := strings.Contains(strings.ToLower(sett.GameMode.Value()), "toygameinfo")
 
 	log.Logger.Debug("Starting server configuration file update",
 		"function", "updateConfigFile", "file", kfiFilePath)
-
-	if tmEnabled && !strings.EqualFold(strings.ToLower(kfiFileName), "toygame.ini") {
-		log.Logger.Warn("Toy Master game mode is enabled, but the configuration file is not 'ToyGame.ini'. This may cause unexpected behavior",
-			"function", "updateConfigFile", "file", kfiFilePath)
-	}
 
 	// If the specified configuration file doesn't exists,
 	// let's extract the corresponding default file
 	if !utils.FileExists(kfiFilePath) {
 		defaultIniFileName := "KillingFloor.ini"
-		if tmEnabled {
-			defaultIniFileName = "ToyGame.ini"
-		}
 
 		log.Logger.Debug("Missing server configuration file. Extracting the default one...",
 			"function", "updateConfigFile", "file", kfiFilePath, "defaultFileName", defaultIniFileName)
@@ -218,10 +212,14 @@ func updateConfigFile(sett *settings.KFDSLSettings) error {
 	var kfi config.ServerIniFile
 	var err error
 
-	// Toy Master support
-	if tmEnabled {
+	// Objective
+	if useObjectiveMode {
+		kfi, err = config.NewKFObjectiveIniFile(kfiFilePath)
+	} else if useToyMasterMode {
+		// Toy Master
 		kfi, err = config.NewKFTGIniFile(kfiFilePath)
 	} else {
+		// Survival
 		kfi, err = config.NewKFIniFile(kfiFilePath)
 	}
 	if err != nil {
@@ -250,7 +248,7 @@ func updateConfigFile(sett *settings.KFDSLSettings) error {
 		newConfigUpdater(sett.AdminName.Name(), func() any { return kfi.GetAdminName() }, func(v any) bool { return kfi.SetAdminName(v.(string)) }, sett.AdminName.Value()),
 		newConfigUpdater(sett.AdminMail.Name(), func() any { return kfi.GetAdminMail() }, func(v any) bool { return kfi.SetAdminMail(v.(string)) }, sett.AdminMail.Value()),
 		newConfigUpdater(sett.AdminPassword.Name(), func() any { return kfi.GetAdminPassword() }, func(v any) bool { return kfi.SetAdminPassword(v.(string)) }, sett.AdminPassword.Value()),
-		newConfigUpdater(sett.MOTD.Value(), func() any { return kfi.GetMOTD() }, func(v any) bool { return kfi.SetMOTD(v.(string)) }, sett.MOTD.Value()),
+		newConfigUpdater(sett.MOTD.Name(), func() any { return kfi.GetMOTD() }, func(v any) bool { return kfi.SetMOTD(v.(string)) }, sett.MOTD.Value()),
 		newConfigUpdater(sett.SpecimenType.Name(), func() any { return kfi.GetSpecimenType() }, func(v any) bool { return kfi.SetSpecimenType(v.(string)) }, sett.SpecimenType.Value()),
 		newConfigUpdater(sett.RedirectURL.Name(), func() any { return kfi.GetRedirectURL() }, func(v any) bool { return kfi.SetRedirectURL(v.(string)) }, sett.RedirectURL.Value()),
 		newConfigUpdater(sett.EnableWebAdmin.Name(), func() any { return kfi.IsWebAdminEnabled() }, func(v any) bool { return kfi.SetWebAdminEnabled(v.(bool)) }, sett.EnableWebAdmin.Value()),

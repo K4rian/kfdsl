@@ -19,7 +19,9 @@ func Init(
 	maxBackups int,
 	maxAge int,
 	logToFile bool,
-) {
+) error {
+	var err error
+
 	once.Do(func() {
 		loggerConfig := &dslogger.Config{
 			LogFile:       file,
@@ -31,9 +33,10 @@ func Init(
 		}
 
 		if logToFile {
-			Logger = dslogger.NewLogger(level, loggerConfig)
+			Logger, err = dslogger.NewLogger(level, loggerConfig)
 		} else {
-			Logger = dslogger.NewConsoleLogger(level, loggerConfig)
+			Logger, err = dslogger.NewConsoleLogger(level, loggerConfig)
 		}
 	})
+	return err
 }

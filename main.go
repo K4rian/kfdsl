@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/signal"
 	"syscall"
@@ -24,7 +25,7 @@ func main() {
 	sett := settings.Get()
 
 	// Init the logger
-	log.Init(
+	if err := log.Init(
 		sett.LogLevel.Value(),
 		sett.LogFile.Value(),
 		sett.LogFileFormat.Value(),
@@ -32,7 +33,10 @@ func main() {
 		sett.LogMaxBackups.Value(),
 		sett.LogMaxAge.Value(),
 		sett.LogToFile.Value(),
-	)
+	); err != nil {
+		fmt.Printf("ERROR: Failed to init the logger: %v", err)
+		os.Exit(1)
+	}
 	log.Logger.Debug("Log system initialized",
 		"function", "main")
 

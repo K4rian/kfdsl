@@ -47,7 +47,7 @@ func ParseIntRange(a *Argument[int], min int, max int) func(a *Argument[int]) (i
 
 func ParsePort(a *Argument[int]) (int, error) {
 	raw := a.RawValue()
-	if raw < 1024 && raw > 65535 {
+	if raw < 1024 || raw > 65535 {
 		return 0, fmt.Errorf("invalid %s port (%d): value must be in range 1025-65534", a.Name(), raw)
 	}
 	return raw, nil

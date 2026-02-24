@@ -138,11 +138,14 @@ func ParseGameMode(a *Argument[string]) (string, error) {
 
 func ParseGameDifficulty(raw string) func(a *Argument[int]) (int, error) {
 	difficulties := map[string]int{
-		"easy":     1,
-		"normal":   2,
-		"hard":     4,
-		"suicidal": 5,
-		"hell":     7,
+		"beginner":    1,
+		"easy":        1,
+		"normal":      2,
+		"hard":        4,
+		"suicidal":    5,
+		"hellonearth": 7,
+		"hoe":         7,
+		"hell":        7,
 	}
 
 	var (
@@ -166,6 +169,7 @@ func ParseGameLength(raw string) func(a *Argument[int]) (int, error) {
 		"short":  0,
 		"medium": 1,
 		"long":   2,
+		"custom": 3,
 	}
 
 	var (

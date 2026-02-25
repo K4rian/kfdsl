@@ -1,4 +1,4 @@
-package main
+package embed
 
 import (
 	"embed"
@@ -11,10 +11,9 @@ import (
 )
 
 //go:embed assets/configs/*
-
 var embeddedFiles embed.FS
 
-func ExtractEmbedFile(embedPath, targetPath string) error {
+func ExtractFile(embedPath, targetPath string) error {
 	if utils.FileExists(targetPath) {
 		return nil
 	}

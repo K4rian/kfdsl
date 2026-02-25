@@ -1,23 +1,17 @@
-package main
+package launcher
 
 import (
-	"context"
-	"errors"
 	"fmt"
-	"os"
 	"path"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/spf13/viper"
 
+	"github.com/K4rian/kfdsl/embed"
 	"github.com/K4rian/kfdsl/internal/config"
-	"github.com/K4rian/kfdsl/internal/config/secrets"
 	"github.com/K4rian/kfdsl/internal/log"
-	"github.com/K4rian/kfdsl/internal/mods"
 	"github.com/K4rian/kfdsl/internal/services/kfserver"
-	"github.com/K4rian/kfdsl/internal/services/steamcmd"
 	"github.com/K4rian/kfdsl/internal/settings"
 	"github.com/K4rian/kfdsl/internal/utils"
 )
@@ -36,149 +30,6 @@ func newConfigUpdater[T any](name string, gv func() T, sv func(T) bool, nv any) 
 		sv:   sv,
 		nv:   nv,
 	}
-}
-
-const (
-	KF_APPID = 215360
-)
-
-func startSteamCMD(sett *settings.KFDSLSettings, ctx context.Context) error {
-	rootDir := viper.GetString("steamcmd-root")
-	steamCMD := steamcmd.NewSteamCMD(rootDir, ctx)
-
-	log.Logger.Debug("Initializing SteamCMD",
-		"function", "startSteamCMD", "rootDir", rootDir)
-
-	if !steamCMD.IsAvailable() {
-		return fmt.Errorf("SteamCMD not found in %s. Please install it manually", steamCMD.RootDirectory())
-	}
-
-	// Read Steam Account Credentials
-	if err := readSteamCredentials(sett); err != nil {
-		return fmt.Errorf("failed to read Steam credentials: %w", err)
-	}
-
-	// Generate the Steam install script
-	installScript := filepath.Join(rootDir, "kfds_install_script.txt")
-	serverInstallDir := viper.GetString("steamcmd-appinstalldir")
-
-	log.Logger.Info("Writing the KF Dedicated Server install script...", "scriptPath", installScript)
-	if err := steamCMD.WriteScript(
-		installScript,
-		sett.SteamLogin,
-		sett.SteamPassword,
-		serverInstallDir,
-		KF_APPID,
-		!sett.NoValidate.Value(),
-	); err != nil {
-		return err
-	}
-	log.Logger.Info("Install script was successfully written", "scriptPath", installScript)
-
-	log.Logger.Info("Starting SteamCMD...", "rootDir", steamCMD.RootDirectory(), "appInstallDir", serverInstallDir)
-	if err := steamCMD.RunScript(installScript); err != nil && !errors.Is(err, context.Canceled) {
-		return err
-	}
-
-	// Block until SteamCMD finishes
-	log.Logger.Debug("Wait till SteamCMD finishes",
-		"function", "startSteamCMD", "rootDir", rootDir)
-	start := time.Now()
-	if err := steamCMD.Wait(); err != nil {
-		return err
-	}
-	log.Logger.Debug("SteamCMD process completed",
-		"function", "startSteamCMD", "rootDir", rootDir, "elapsedTime", time.Since(start))
-	return nil
-}
-
-func startGameServer(sett *settings.KFDSLSettings, ctx context.Context) (*kfserver.KFServer, error) {
-	mutators := sett.Mutators.Value()
-	if sett.EnableMutLoader.Value() {
-		mutators = "MutLoader.MutLoader"
-	}
-
-	rootDir := viper.GetString("steamcmd-appinstalldir")
-	configFileName := sett.ConfigFile.Value()
-	startupMap := sett.StartupMap.Value()
-	gameMode := sett.GameMode.Value()
-	unsecure := sett.Unsecure.Value()
-	maxPlayers := sett.MaxPlayers.Value()
-	extraArgs := viper.GetStringSlice("KF_EXTRAARGS")
-
-	gameServer := kfserver.NewKFServer(
-		rootDir,
-		configFileName,
-		startupMap,
-		gameMode,
-		unsecure,
-		maxPlayers,
-		mutators,
-		extraArgs,
-		ctx,
-	)
-
-	log.Logger.Debug("Initializing KF Dedicated Server",
-		"function", "startGameServer", "rootDir", rootDir, "startupMap", startupMap,
-		"gameMode", gameMode, "unsecure", unsecure, "maxPlayers", maxPlayers,
-		"mutators", mutators, "extraArgs", extraArgs,
-	)
-
-	if !gameServer.IsAvailable() {
-		return nil, fmt.Errorf("unable to locate the KF Dedicated Server files in '%s', please install using SteamCMD", gameServer.RootDirectory())
-	}
-
-	log.Logger.Info("Updating the KF Dedicated Server configuration file...", "file", configFileName)
-	if err := updateConfigFile(sett); err != nil {
-		return nil, fmt.Errorf("failed to update the KF Dedicated Server configuration file %s: %w", configFileName, err)
-	}
-	log.Logger.Info("Server configuration file successfully updated", "file", configFileName)
-
-	if err := installMods(sett); err != nil {
-		log.Logger.Error("Failed to install mods", "file", sett.ModsFile.Value(), "error", err)
-		return nil, fmt.Errorf("failed to install mods: %w", err)
-	}
-
-	if sett.EnableKFPatcher.Value() {
-		kfpConfigFilePath := filepath.Join(rootDir, "System", "KFPatcherSettings.ini")
-		log.Logger.Info("Updating the KFPatcher configuration file...", "file", kfpConfigFilePath)
-		if err := updateKFPatcherConfigFile(sett); err != nil {
-			return nil, fmt.Errorf("failed to update the KFPatcher configuration file %s: %w", kfpConfigFilePath, err)
-		}
-		log.Logger.Info("KFPatcher configuration file successfully updated", "file", kfpConfigFilePath)
-	}
-
-	log.Logger.Info("Verifying KF Dedicated Server Steam libraries for updates...")
-	updatedLibs, err := updateGameServerSteamLibs()
-	if err == nil {
-		if len(updatedLibs) > 0 {
-			for _, lib := range updatedLibs {
-				log.Logger.Info("Steam library successfully updated", "library", lib)
-			}
-		} else {
-			log.Logger.Info("All server Steam libraries are up-to-date")
-		}
-	} else {
-		log.Logger.Error("Unable to update the KF Dedicated Server Steam libraries", "error", err)
-	}
-
-	log.Logger.Info("Starting the KF Dedicated Server...", "rootDir", gameServer.RootDirectory(), "autoRestart", sett.AutoRestart.Value())
-	if err := gameServer.Start(sett.AutoRestart.Value()); err != nil {
-		return nil, fmt.Errorf("failed to start the KF Dedicated Server: %w", err)
-	}
-	return gameServer, nil
-}
-
-func extractDefaultConfigFile(filename string, filePath string) error {
-	defaultIniFilePath := filepath.Join("assets/configs", filename)
-
-	log.Logger.Debug("Extracting default configuration file",
-		"function", "extractDefaultConfigFile", "sourceFile", defaultIniFilePath, "destFile", filePath)
-
-	if err := ExtractEmbedFile(defaultIniFilePath, filePath); err != nil {
-		return fmt.Errorf("failed to extract default config file %s: %w", filename, err)
-	}
-	return nil
 }
 
 func updateConfigFile(sett *settings.KFDSLSettings) error {
@@ -444,120 +295,14 @@ func updateKFPatcherConfigFile(sett *settings.KFDSLSettings) error {
 	return err
 }
 
-func updateGameServerSteamLibs() ([]string, error) {
-	ret := []string{}
-	rootDir := viper.GetString("steamcmd-appinstalldir")
-	systemDir := path.Join(rootDir, "System")
-	libsDir := path.Join(viper.GetString("steamcmd-root"), "linux32")
+func extractDefaultConfigFile(filename string, filePath string) error {
+	defaultIniFilePath := filepath.Join("assets/configs", filename)
 
-	log.Logger.Debug("Starting server Steam libraries update",
-		"function", "updateGameServerSteamLibs", "rootDir", rootDir, "systemDir", systemDir, "libsDir", libsDir)
+	log.Logger.Debug("Extracting default configuration file",
+		"function", "extractDefaultConfigFile", "sourceFile", defaultIniFilePath, "destFile", filePath)
 
-	libs := map[string]string{
-		path.Join(libsDir, "steamclient.so"):  path.Join(systemDir, "steamclient.so"),
-		path.Join(libsDir, "libtier0_s.so"):   path.Join(systemDir, "libtier0_s.so"),
-		path.Join(libsDir, "libvstdlib_s.so"): path.Join(systemDir, "libvstdlib_s.so"),
+	if err := embed.ExtractFile(defaultIniFilePath, filePath); err != nil {
+		return fmt.Errorf("failed to extract default config file %s: %w", filename, err)
 	}
-
-	for srcFile, dstFile := range libs {
-		identical, err := utils.SHA1Compare(srcFile, dstFile)
-		if err != nil {
-			log.Logger.Warn("Error comparing file checksums",
-				"function", "updateGameServerSteamLibs", "sourceFile", srcFile, "destFile", dstFile, "error", err)
-			return ret, fmt.Errorf("error comparing files %s and %s: %w", srcFile, dstFile, err)
-		}
-
-		if !identical {
-			log.Logger.Debug("Files differ, updating destination file",
-				"function", "updateGameServerSteamLibs", "sourceFile", srcFile, "destFile", dstFile)
-			if err := utils.CopyAndReplaceFile(srcFile, dstFile); err != nil {
-				return ret, err
-			}
-			log.Logger.Debug("Successfully updated game server library",
-				"function", "updateGameServerSteamLibs", "sourceFile", srcFile, "destFile", dstFile)
-			ret = append(ret, dstFile)
-		} else {
-			log.Logger.Debug("Files are already identical, skipping update",
-				"function", "updateGameServerSteamLibs", "sourceFile", srcFile, "destFile", dstFile)
-		}
-	}
-
-	log.Logger.Debug("Server Steam libraries update complete",
-		"function", "updateGameServerSteamLibs", "updatedFilesCount", len(ret))
-	return ret, nil
-}
-
-func readSteamCredentials(sett *settings.KFDSLSettings) error {
-	var fromEnv bool
-
-	defer func() {
-		if fromEnv {
-			_ = os.Unsetenv("STEAMACC_USERNAME")
-			_ = os.Unsetenv("STEAMACC_PASSWORD")
-		}
-	}()
-
-	log.Logger.Debug("Starting Steam credential retrieval",
-		"function", "readSteamCredentials")
-
-	// Try reading from Docker Secrets
-	log.Logger.Debug("Attempting to read from Docker Secrets",
-		"function", "readSteamCredentials")
-	steamUsername, errUser := secrets.Read("steamacc_username")
-	steamPassword, errPass := secrets.Read("steamacc_password")
-
-	// Fallback to environment variables if secrets are missing
-	if errUser != nil {
-		log.Logger.Debug("Secret not found, falling back to environment variable",
-			"function", "readSteamCredentials", "secret", "steamacc_username", "error", errUser)
-		steamUsername = viper.GetString("STEAMACC_USERNAME")
-		fromEnv = true
-	}
-	if errPass != nil {
-		log.Logger.Debug("Secret not found, falling back to environment variable",
-			"function", "readSteamCredentials", "secret", "steamacc_password", "error", errPass)
-		steamPassword = viper.GetString("STEAMACC_PASSWORD")
-		fromEnv = true
-	}
-
-	// Ensure both credentials are present
-	if steamUsername == "" || steamPassword == "" {
-		log.Logger.Debug("Missing Steam credentials, aborting",
-			"function", "readSteamCredentials", "steamUsernameEmpty", steamUsername == "", "steamPasswordEmpty", steamPassword == "")
-		return fmt.Errorf("incomplete credentials: Steam username and password are required")
-	}
-
-	// Update the settings
-	log.Logger.Debug("Successfully retrieved credentials, updating settings",
-		"function", "readSteamCredentials")
-	sett.SteamLogin = steamUsername
-	sett.SteamPassword = steamPassword
-	return nil
-}
-
-func installMods(sett *settings.KFDSLSettings) error {
-	filename := sett.ModsFile.Value()
-
-	if filename == "" {
-		log.Logger.Info("No mods file specified, skipping mods installation")
-		return nil
-	}
-	if !utils.FileExists(filename) {
-		log.Logger.Warn("Mods file not found, skipping mods installation", "file", filename)
-		return nil
-	}
-
-	log.Logger.Debug("Starting mods installation process")
-	m, err := mods.ParseModsFile(filename)
-	if err != nil {
-		return fmt.Errorf("failed to parse mods file %s: %w", filename, err)
-	}
-
-	installed := make([]string, 0)
-	mods.InstallMods(viper.GetString("steamcmd-appinstalldir"), m, &installed)
-
-	log.Logger.Debug("Completed mods installation process")
-	log.Logger.Info("The following mods were installed:", "mods", strings.Join(installed, " / "))
-
 	return nil
 }

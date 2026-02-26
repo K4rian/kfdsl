@@ -5,14 +5,14 @@ import (
 	"math"
 )
 
-func FormatBool[T bool](a *Argument[bool]) string {
+func FormatBool(a *Argument[bool]) string {
 	if a.Value() {
 		return "Enabled"
 	}
 	return "Disabled"
 }
 
-func FormatGameMode[T string](a *Argument[string]) string {
+func FormatGameMode(a *Argument[string]) string {
 	val := a.Value()
 	modes := map[string]string{
 		"KFmod.KFGameType":            "Survival",
@@ -26,7 +26,7 @@ func FormatGameMode[T string](a *Argument[string]) string {
 	return modes[val]
 }
 
-func FormatGameDifficulty[T int](a *Argument[int]) string {
+func FormatGameDifficulty(a *Argument[int]) string {
 	diff := map[int]string{
 		1: "Easy",
 		2: "Normal",
@@ -37,7 +37,7 @@ func FormatGameDifficulty[T int](a *Argument[int]) string {
 	return diff[a.Value()]
 }
 
-func FormatGameLength[T int](a *Argument[int]) string {
+func FormatGameLength(a *Argument[int]) string {
 	lengths := map[int]string{
 		0: "Short",
 		1: "Medium",
@@ -46,11 +46,11 @@ func FormatGameLength[T int](a *Argument[int]) string {
 	return lengths[a.Value()]
 }
 
-func FormatFriendlyFireRate[T float64](a *Argument[float64]) string {
+func FormatFriendlyFireRate(a *Argument[float64]) string {
 	return fmt.Sprintf("%.0f%%", math.Round(a.Value()*100))
 }
 
-func FormatSpecimenType[T string](a *Argument[string]) string {
+func FormatSpecimenType(a *Argument[string]) string {
 	specimenTypes := map[string]string{
 		"ET_None":             "Default",
 		"ET_SummerSideshow":   "Summer (Summer Sideshow)",

@@ -203,7 +203,9 @@ func UnzipFile(source, destination string) error {
 	}
 	defer r.Close()
 
-	os.MkdirAll(destination, os.ModeDir)
+	if err := os.MkdirAll(destination, os.ModeDir); err != nil {
+		return fmt.Errorf("failed to create directory %s: %w", destination, err)
+	}
 
 	extractAndWriteFile := func(f *zip.File) error {
 		rc, err := f.Open()
@@ -220,9 +222,13 @@ func UnzipFile(source, destination string) error {
 		}
 
 		if f.FileInfo().IsDir() {
-			os.MkdirAll(path, f.Mode())
+			if err := os.MkdirAll(path, f.Mode()); err != nil {
+				return fmt.Errorf("failed to create directory %s: %w", path, err)
+			}
 		} else {
-			os.MkdirAll(filepath.Dir(path), f.Mode())
+			if err := os.MkdirAll(filepath.Dir(path), f.Mode()); err != nil {
+				return fmt.Errorf("failed to create directory %s: %w", path, err)
+			}
 			f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, f.Mode())
 			if err != nil {
 				return err

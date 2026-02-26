@@ -38,7 +38,7 @@ func Run() {
 		os.Exit(1)
 	}
 	log.Logger.Debug("Log system initialized",
-		"function", "main")
+		"function", "Run")
 
 	// Create a cancel context
 	ctx, cancel := context.WithCancel(context.Background())
@@ -56,10 +56,10 @@ func Run() {
 			os.Exit(1)
 		}
 		log.Logger.Debug("SteamCMD process completed",
-			"function", "main", "elapsedTime", time.Since(start))
+			"function", "Run", "elapsedTime", time.Since(start))
 	} else {
 		log.Logger.Debug("SteamCMD is disabled and won't be started",
-			"function", "main")
+			"function", "Run")
 	}
 
 	var server *kfserver.KFServer
@@ -71,14 +71,14 @@ func Run() {
 
 		if server != nil && server.IsRunning() {
 			log.Logger.Debug("Waiting for the KF Dedicated Server to stop...",
-				"function", "main")
+				"function", "Run")
 			if err := server.Wait(); err != nil {
 				log.Logger.Error("KF Dedicated Server raised an error during shutdown", "error", err)
 			}
 		}
 		log.Logger.Info("KF Dedicated Server has been stopped.")
 		log.Logger.Debug("KF Dedicated Server process completed",
-			"function", "main", "elapsedTime", time.Since(startTime))
+			"function", "Run", "elapsedTime", time.Since(startTime))
 	}()
 
 	// Start the Killing Floor Dedicated Server
@@ -91,5 +91,5 @@ func Run() {
 	<-signalChan
 	signal.Stop(signalChan)
 	log.Logger.Debug("Program finished, exiting now...",
-		"function", "main")
+		"function", "Run")
 }

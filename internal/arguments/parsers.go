@@ -22,7 +22,7 @@ func ParseNonEmptyStr(a *Argument[string]) (string, error) {
 func ParsePositiveInt(a *Argument[int]) (int, error) {
 	raw := a.RawValue()
 	if raw < 1 {
-		return 0, fmt.Errorf("invalid %s (%d): value cannot be negative", a.Name(), raw)
+		return 0, fmt.Errorf("invalid %s (%d): value must be positive", a.Name(), raw)
 	}
 	return raw, nil
 }
@@ -55,11 +55,11 @@ func ParsePort(a *Argument[int]) (int, error) {
 
 func ParsePassword(a *Argument[string]) (string, error) {
 	raw := a.RawValue()
-	val := strings.TrimSpace(strings.ToLower(raw))
+	val := strings.TrimSpace(raw)
 	if val != "" && len(val) > 16 {
 		return "", fmt.Errorf("invalid %s (%s): value cannot exceed 16 characters", a.Name(), raw)
 	}
-	return strings.TrimSpace(raw), nil
+	return val, nil
 }
 
 func ParseURL(a *Argument[string]) (string, error) {
@@ -156,7 +156,7 @@ func ParseGameDifficulty(raw string) func(a *Argument[int]) (int, error) {
 
 	val, ok = difficulties[strings.ToLower(raw)]
 	if !ok {
-		val = 0.0
+		val = 0
 		err = fmt.Errorf("invalid Game Difficulty: %s", raw)
 	}
 	return func(a *Argument[int]) (int, error) {

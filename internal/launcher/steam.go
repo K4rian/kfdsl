@@ -58,6 +58,15 @@ func startSteamCMD(sett *settings.KFDSLSettings, ctx context.Context) error {
 		return err
 	}
 
+	// Purge the install script file once SteamCMD process exits
+	defer func() {
+		if err := os.Remove(installScript); err != nil && !os.IsNotExist(err) {
+			log.Logger.Warn("Could not delete install script file", "scriptPath", installScript, "error", err)
+		} else {
+			log.Logger.Info("Install script was successfully deleted", "scriptPath", installScript)
+		}
+	}()
+
 	// Block until SteamCMD finishes
 	log.Logger.Debug("Wait till SteamCMD finishes",
 		"function", "startSteamCMD", "rootDir", rootDir)

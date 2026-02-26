@@ -25,7 +25,7 @@ func ExtractFile(embedPath, targetPath string) error {
 	}
 
 	// Ensure directory exists
-	if err := os.MkdirAll(filepath.Dir(targetPath), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(targetPath), 0644); err != nil {
 		return fmt.Errorf("failed to create directory: %w", err)
 	}
 

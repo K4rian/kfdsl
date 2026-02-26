@@ -40,7 +40,7 @@ func (s *SteamCMD) RunScript(fileName string) error {
 }
 
 func (s *SteamCMD) WriteScript(fileName string, loginUser string, loginPassword string, installDir string, appID int, validate bool) error {
-	file, err := os.Create(fileName)
+	file, err := os.OpenFile(fileName, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
 	if err != nil {
 		return fmt.Errorf("cannot create script file %s: %v", fileName, err)
 	}

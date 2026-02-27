@@ -15,7 +15,7 @@ import (
 
 const (
 	heartbeatInterval = 6 * time.Second
-	heartbeatTimeout  = heartbeatInterval * 3
+	heartbeatTimeout  = 180
 	heartbeatSignal   = "Sending updated server details"
 )
 
@@ -200,6 +200,8 @@ func (s *KFServer) updateHeartbeat(currentP int, parsed bool) {
 	}
 	s.stateMu.Unlock()
 
+	s.Logger().Debug("Heartbeat received", "players", currentP)
+
 	if !wasAvailable {
 		s.Logger().Info("Server is ready")
 	}
@@ -229,8 +231,6 @@ func (s *KFServer) startWatchdog() {
 				last := s.lastHeartbeat
 				avail := s.ready
 				s.stateMu.RUnlock()
-
-				s.Logger().Debug("...Tick, tack...")
 
 				// Only act once the server is ready
 				// Don't trigger on a (potentially long) silent boot phase

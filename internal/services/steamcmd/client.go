@@ -66,6 +66,6 @@ func (s *SteamCMD) WriteScript(fileName string, loginUser string, loginPassword 
 	return nil
 }
 
-func (s *SteamCMD) IsAvailable() bool {
+func (s *SteamCMD) IsInstalled() bool {
 	return utils.FileExists(path.Join(s.RootDirectory(), "steamcmd.sh"))
 }

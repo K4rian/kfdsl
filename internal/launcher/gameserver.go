@@ -46,7 +46,7 @@ func startGameServer(sett *settings.KFDSLSettings, ctx context.Context) (*kfserv
 		"mutators", mutators, "extraArgs", extraArgs,
 	)
 
-	if !gameServer.IsAvailable() {
+	if !gameServer.IsInstalled() {
 		return nil, fmt.Errorf("unable to locate the KF Dedicated Server files in '%s', please install using SteamCMD", gameServer.RootDirectory())
 	}
 

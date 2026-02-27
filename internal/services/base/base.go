@@ -19,6 +19,10 @@ import (
 	"github.com/K4rian/kfdsl/internal/log"
 )
 
+// LogHandler is a function that receives each log line from the process.
+// Return true to signal that the service should be restarted.
+type LogHandler func(line string) (shouldRestart bool)
+
 type BaseService struct {
 	name        string
 	rootDir     string
@@ -34,6 +38,12 @@ type BaseService struct {
 	stopping    bool
 	execErr     error
 	startOnce   sync.Once
+	logHandlers []LogHandler
+
+	// preRestartHook is called before the process is stopped during a restart.
+	preRestartHook func()
+	// postRestartHook is called after the process has been successfully restarted.
+	postRestartHook func()
 }
 
 func NewBaseService(name string, rootDir string, ctx context.Context) *BaseService {
@@ -46,12 +56,44 @@ func NewBaseService(name string, rootDir string, ctx context.Context) *BaseServi
 	return bs
 }
 
+// Name returns the service's name.
 func (bs *BaseService) Name() string {
 	return bs.name
 }
 
+// RootDirectory returns the service's root directory.
 func (bs *BaseService) RootDirectory() string {
 	return bs.rootDir
+}
+
+// Logger returns the service's logger.
+func (bs *BaseService) Logger() *dslogger.Logger {
+	return bs.logger
+}
+
+// SetPreRestartHook registers a function to be called before the process is
+// stopped during a Restart cycle. Only one hook is supported.
+func (bs *BaseService) SetPreRestartHook(fn func()) {
+	bs.mu.Lock()
+	defer bs.mu.Unlock()
+	bs.preRestartHook = fn
+}
+
+// SetPostRestartHook registers a function to be called after the process has
+// been successfully restarted in a Restart cycle.
+// Only one hook is suported.
+func (bs *BaseService) SetPostRestartHook(fn func()) {
+	bs.mu.Lock()
+	defer bs.mu.Unlock()
+	bs.postRestartHook = fn
+}
+
+// AddLogHandler registers a log handler callback that is called for every
+// line of output produced by the process.
+func (bs *BaseService) AddLogHandler(h LogHandler) {
+	bs.mu.Lock()
+	defer bs.mu.Unlock()
+	bs.logHandlers = append(bs.logHandlers, h)
 }
 
 // Start initiates the service's process and manages the start/stop lifecycle.
@@ -119,9 +161,21 @@ func (bs *BaseService) Start(args []string, autoRestart bool) error {
 
 		scanner := bufio.NewScanner(ptmx)
 		for scanner.Scan() {
-			bs.logger.Info(scanner.Text())
+			line := scanner.Text()
+			bs.logger.Info(line)
+
+			// Invoke registered log handlers
+			// Avoid scheduling multiple concurrent restarts for the same line
+			for _, h := range bs.logHandlers {
+				if h(line) {
+					bs.logger.Warn("Log handler requested restart", "line", line)
+					go bs.Restart()
+					break
+				}
+			}
 		}
 
+		// EIO is expected when the pty slave is closed, treat it as a clean exit
 		if err := scanner.Err(); err != nil && !errors.Is(err, syscall.EIO) {
 			bs.mu.Lock()
 			bs.execErr = fmt.Errorf("error reading from pty: %w", err)
@@ -202,19 +256,63 @@ func (bs *BaseService) Stop() error {
 	return nil
 }
 
+func (bs *BaseService) Restart() {
+	bs.mu.Lock()
+	autoRestart := bs.autoRestart
+	args := make([]string, len(bs.args))
+	copy(args, bs.args)
+	bs.stopping = true // prevent monitorAutoRestart from racing
+	bs.mu.Unlock()
+
+	// Allow the embedding service to clean up before the process is stopped
+	if bs.preRestartHook != nil {
+		bs.preRestartHook()
+	}
+
+	if err := bs.Stop(); err != nil {
+		bs.logger.Error("Failed to stop service during restart", "error", err)
+		return
+	}
+
+	// If the auto restart feature is disabled, exit here
+	if !autoRestart {
+		bs.logger.Info("Auto-restart is disabled; service will remain stopped")
+		bs.cancel() // unblock monitorCancellation and signal the app to exit
+		return
+	}
+
+	bs.logger.Info("Restarting service...")
+	time.Sleep(2 * time.Second)
+
+	if err := bs.Start(args, autoRestart); err != nil {
+		bs.logger.Error("Failed to restart service", "error", err)
+		return
+	}
+
+	// Allow the embedding service to reinitialise after the new process is up
+	if bs.postRestartHook != nil {
+		bs.postRestartHook()
+	}
+}
+
 // Wait waits for the process to exit and returns any execution error.
 func (bs *BaseService) Wait() error {
 	<-bs.done
 	return bs.execErr
 }
 
-// IsRunning returns whether the service is currently running.
+// IsInstalled returns true if the service is present on the system.
+func (bs *BaseService) IsInstalled() bool {
+	return false
+}
+
+// IsRunning returns true if the service's process is currently alive at the OS level.
 func (bs *BaseService) IsRunning() bool {
 	return bs.cmd != nil && bs.cmd.Process != nil && bs.cmd.ProcessState == nil
 }
 
-// IsAvailable returns whether the service is available.
-func (bs *BaseService) IsAvailable() bool {
+// IsReady returns true if the service is fully operational.
+func (bs *BaseService) IsReady() bool {
 	return false
 }
 

@@ -27,7 +27,7 @@ func startSteamCMD(sett *settings.KFDSLSettings, ctx context.Context) error {
 	log.Logger.Debug("Initializing SteamCMD",
 		"function", "startSteamCMD", "rootDir", rootDir)
 
-	if !steamCMD.IsAvailable() {
+	if !steamCMD.IsInstalled() {
 		return fmt.Errorf("SteamCMD not found in %s. Please install it manually", steamCMD.RootDirectory())
 	}
 

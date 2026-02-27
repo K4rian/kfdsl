@@ -4,11 +4,19 @@ import (
 	"context"
 	"fmt"
 	"path"
+	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/K4rian/kfdsl/internal/services/base"
 	"github.com/K4rian/kfdsl/internal/utils"
+)
+
+const (
+	heartbeatInterval = 6 * time.Second
+	heartbeatTimeout  = heartbeatInterval * 3
+	heartbeatSignal   = "Sending updated server details"
 )
 
 // UE2 patterns that indicate a fatal crash
@@ -33,6 +41,11 @@ type KFServer struct {
 	executable     string
 	ready          bool
 	stateMu        sync.RWMutex
+	// Heartbeat watchdog
+	lastHeartbeat  time.Time
+	watchdogStop   chan struct{}
+	watchdogMu     sync.Mutex
+	currentPlayers int
 }
 
 func NewKFServer(
@@ -58,6 +71,10 @@ func NewKFServer(
 		executable:     path.Join(rootDir, "System", "ucc-bin"),
 	}
 	kfs.AddLogHandler(kfs.handleCrash)
+	kfs.AddLogHandler(kfs.handleHeartbeat)
+
+	kfs.SetPreRestartHook(kfs.stopWatchdog)
+	kfs.SetPostRestartHook(kfs.startWatchdog)
 	return kfs
 }
 
@@ -67,10 +84,12 @@ func (s *KFServer) Start(autoRestart bool) error {
 	if err != nil {
 		return err
 	}
+	s.startWatchdog()
 	return nil
 }
 
 func (s *KFServer) Stop() error {
+	s.stopWatchdog()
 	s.setReady(false)
 	return s.BaseService.Stop()
 }
@@ -135,8 +154,123 @@ func (s *KFServer) handleCrash(line string) bool {
 	return false
 }
 
+// handleHeartbeat parses the periodic STEAMAUTH line to update runtime state.
+// Expected format:
+//
+//	STEAMAUTH : Sending updated server details - <SERVER_NAME> <CURRENT> | <MAX>
+//
+// Example:
+//
+//	STEAMAUTH : Sending updated server details - My Server 2 | 6
+func (s *KFServer) handleHeartbeat(line string) bool {
+	if !strings.Contains(line, heartbeatSignal) {
+		return false
+	}
+
+	// Split on " | " to isolate the left side, which contains the current player count
+	// as its last token. The right side (max players) is discarded
+	parts := strings.SplitN(line, " | ", 2)
+	if len(parts) != 2 {
+		// Heartbeat detected but unparseable
+		// still mark the server as available and reset the watchdog timer
+		s.updateHeartbeat(0, false)
+		return false
+	}
+
+	current, err := parseCurrentPlayers(parts[0])
+	if err != nil {
+		s.Logger().Warn("Failed to parse heartbeat player count", "error", err)
+		s.updateHeartbeat(0, false)
+		return false
+	}
+
+	s.updateHeartbeat(current, true)
+	return false
+}
+
+// updateHeartbeat applies a parsed heartbeat to the runtime state under a
+// single write lock
+func (s *KFServer) updateHeartbeat(currentP int, parsed bool) {
+	s.stateMu.Lock()
+	wasAvailable := s.ready
+	s.lastHeartbeat = time.Now()
+	s.ready = true
+	if parsed {
+		s.currentPlayers = currentP
+	}
+	s.stateMu.Unlock()
+
+	if !wasAvailable {
+		s.Logger().Info("Server is ready")
+	}
+}
+
+// startWatchdog launches a goroutine that restarts the server if heartbeats stop.
+func (s *KFServer) startWatchdog() {
+	s.watchdogMu.Lock()
+	defer s.watchdogMu.Unlock()
+
+	// Ensure any previous channel is cleaned up before creating a new one
+	if s.watchdogStop != nil {
+		return
+	}
+	s.watchdogStop = make(chan struct{})
+
+	go func() {
+		ticker := time.NewTicker(heartbeatInterval)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-s.watchdogStop:
+				return
+			case <-ticker.C:
+				s.stateMu.RLock()
+				last := s.lastHeartbeat
+				avail := s.ready
+				s.stateMu.RUnlock()
+
+				s.Logger().Debug("...Tick, tack...")
+
+				// Only act once the server is ready
+				// Don't trigger on a (potentially long) silent boot phase
+				if avail && time.Since(last) > heartbeatTimeout {
+					s.Logger().Warn("Heartbeat timeout. Server may be hung, triggering restart")
+					s.setReady(false)
+					// Restart will call related hooks so the watchdog
+					// is safely cycled around the restart
+					go s.Restart()
+				}
+			}
+		}
+	}()
+}
+
+func (s *KFServer) stopWatchdog() {
+	s.watchdogMu.Lock()
+	defer s.watchdogMu.Unlock()
+
+	if s.watchdogStop != nil {
+		close(s.watchdogStop)
+		s.watchdogStop = nil
+	}
+}
+
 func (s *KFServer) setReady(v bool) {
 	s.stateMu.Lock()
 	defer s.stateMu.Unlock()
 	s.ready = v
+}
+
+func parseCurrentPlayers(s string) (int, error) {
+	tokens := strings.Fields(s)
+	if len(tokens) == 0 {
+		return 0, fmt.Errorf("unexpected heartbeat format: %q", s)
+	}
+
+	cur, err := strconv.Atoi(tokens[len(tokens)-1])
+	if err != nil {
+		return 0, fmt.Errorf("current players: %w", err)
+	}
+	return cur, nil
 }

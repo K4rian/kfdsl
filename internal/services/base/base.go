@@ -81,7 +81,7 @@ func (bs *BaseService) SetPreRestartHook(fn func()) {
 
 // SetPostRestartHook registers a function to be called after the process has
 // been successfully restarted in a Restart cycle.
-// Only one hook is suported.
+// Only one hook is supported.
 func (bs *BaseService) SetPostRestartHook(fn func()) {
 	bs.mu.Lock()
 	defer bs.mu.Unlock()

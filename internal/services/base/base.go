@@ -33,6 +33,7 @@ type BaseService struct {
 	done        chan struct{}
 	stopping    bool
 	execErr     error
+	startOnce   sync.Once
 }
 
 func NewBaseService(name string, rootDir string, ctx context.Context) *BaseService {
@@ -93,6 +94,11 @@ func (bs *BaseService) Start(args []string, autoRestart bool) error {
 	// Create a done channel to signal when the process is finished
 	bs.done = make(chan struct{})
 
+	// Goroutine to monitor the cancellation context
+	bs.startOnce.Do(func() {
+		go bs.monitorCancellation()
+	})
+
 	// Goroutine to handle the process auto-restart
 	if bs.autoRestart {
 		go bs.monitorAutoRestart()
@@ -117,7 +123,9 @@ func (bs *BaseService) Start(args []string, autoRestart bool) error {
 		}
 
 		if err := scanner.Err(); err != nil && !errors.Is(err, syscall.EIO) {
+			bs.mu.Lock()
 			bs.execErr = fmt.Errorf("error reading from pty: %w", err)
+			bs.mu.Unlock()
 		}
 
 		// Wait for the process to exit
@@ -125,63 +133,72 @@ func (bs *BaseService) Start(args []string, autoRestart bool) error {
 			if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 0 {
 				bs.logger.Debug("Process exited normally")
 			} else {
+				bs.mu.Lock()
 				bs.execErr = fmt.Errorf("process exited with error: %v", err)
+				bs.mu.Unlock()
 			}
 		}
 	}()
-
-	// Goroutine to monitor the cancellation context
-	go bs.monitorCancellation()
 	return nil
 }
 
 // Stop attempts to stop the service's process gracefully, then forcefully if necessary.
 func (bs *BaseService) Stop() error {
 	bs.mu.Lock()
-	defer bs.mu.Unlock()
 
 	// The process is already stopped or never started
 	if bs.cmd == nil {
+		bs.mu.Unlock()
 		return nil
 	}
 
 	// Prevent auto-restart
 	bs.stopping = true
 
-	// Send CTRL+C to gracefully terminate the service
-	if bs.ptmx != nil {
+	// Capture what we need before releasing the lock
+	ptmx := bs.ptmx
+	done := bs.done
+
+	bs.mu.Unlock()
+
+	// Send CTRL+C to gracefully terminate the process
+	if ptmx != nil {
 		bs.logger.Info("Attempting to send SIGINT...")
-		if _, err := bs.ptmx.Write([]byte{3}); err != nil {
+		if _, err := ptmx.Write([]byte{3}); err != nil {
 			bs.logger.Error("Failed to send SIGINT to pty", "error", err)
 		}
 	}
 
-	// Give some time for the process to terminate
-	time.Sleep(2 * time.Second)
+	// Wait for a graceful exit
+	select {
+	case <-done:
+		bs.logger.Info("Process exited gracefully")
+		return nil
+	case <-time.After(2 * time.Second):
+	}
 
-	// If still running, send SIGTERM
-	if bs.cmd.ProcessState == nil || !bs.cmd.ProcessState.Exited() {
+	// Process is still alive, escalate to SIGTERM
+	bs.mu.Lock()
+	cmd := bs.cmd
+	bs.mu.Unlock()
+
+	if cmd != nil && cmd.Process != nil {
 		bs.logger.Warn("Process did not exit after SIGINT, attempting SIGTERM...")
-		if err := bs.cmd.Process.Signal(syscall.SIGTERM); err != nil {
-			bs.logger.Error("Failed to send SIGTERM, attempting to kill the process...", "error", err)
-
-			// If SIGTERM fails, use SIGKILL
-			if err := bs.cmd.Process.Kill(); err != nil {
+		if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
+			bs.logger.Error("Failed to send SIGTERM, attempting SIGKILL...", "error", err)
+			if err := cmd.Process.Kill(); err != nil {
 				return fmt.Errorf("failed to force kill process: %v", err)
 			}
 			bs.logger.Info("Process forcefully killed")
 		}
-	} else {
-		bs.logger.Info("Process exited gracefully")
 	}
 
-	// Clean up the pseudo-terminal
-	if bs.ptmx != nil {
-		bs.ptmx.Close()
-		bs.ptmx = nil
+	// Wait for the process to finish after SIGTERM/SIGKILL
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		return fmt.Errorf("process did not exit after SIGTERM/SIGKILL")
 	}
-
-	bs.cmd = nil
 	return nil
 }
 
@@ -206,19 +223,23 @@ func (bs *BaseService) monitorAutoRestart() {
 	for {
 		<-bs.done
 
-		if bs.stopping {
+		bs.mu.Lock()
+		stopping := bs.stopping
+		autoRestart := bs.autoRestart
+		execErr := bs.execErr
+		args := bs.args
+		bs.mu.Unlock()
+
+		if stopping || !autoRestart || execErr != nil || bs.ctx.Err() != nil {
 			return
 		}
 
-		if bs.autoRestart && bs.execErr == nil {
-			bs.logger.Info(fmt.Sprintf("%s stopped, restarting...", bs.name))
+		bs.logger.Info(fmt.Sprintf("%s stopped, restarting...", bs.name))
+		time.Sleep(2 * time.Second)
 
-			if bs.ctx.Err() == nil {
-				time.Sleep(2 * time.Second)
-				bs.Start(bs.args, bs.autoRestart)
-			}
-		} else {
-			break
+		if err := bs.Start(args, autoRestart); err != nil {
+			bs.logger.Error("Failed to restart service", "error", err)
+			return
 		}
 	}
 }
@@ -227,20 +248,14 @@ func (bs *BaseService) monitorAutoRestart() {
 func (bs *BaseService) monitorCancellation() {
 	signalChan := make(chan os.Signal, 1)
 	signal.Notify(signalChan, os.Interrupt)
+	defer signal.Stop(signalChan)
 
-	<-signalChan
-	signal.Stop(signalChan)
-
-	bs.mu.Lock()
-	defer bs.mu.Unlock()
-
-	if bs.ptmx != nil && bs.IsRunning() {
+	select {
+	case <-signalChan:
+		bs.logger.Info("Interrupt received, shutting down...")
 		bs.cancel()
-
-		bs.logger.Info("Shutting down...")
-		if _, err := bs.ptmx.Write([]byte{3}); err != nil {
-			bs.logger.Error("Failed to send SIGINT to pty", "error", err)
-		}
-		bs.execErr = fmt.Errorf("process cancelled")
+		bs.Stop()
+	case <-bs.ctx.Done():
+		// Context was cancelled externally, nothing to do
 	}
 }

@@ -15,7 +15,7 @@ import (
 
 const (
 	heartbeatInterval = 6 * time.Second
-	heartbeatTimeout  = 180
+	heartbeatTimeout  = 30 * heartbeatInterval
 	heartbeatSignal   = "Sending updated server details"
 )
 

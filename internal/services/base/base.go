@@ -21,13 +21,13 @@ import (
 type BaseService struct {
 	name         string
 	opts         ServiceOptions
+	logger       *dslogger.Logger
 	args         []string
 	cmd          *exec.Cmd
 	ctx          context.Context
 	cancel       context.CancelFunc
 	mu           sync.Mutex
 	ptmx         *os.File
-	logger       *dslogger.Logger
 	done         chan struct{}
 	stopping     bool
 	execErr      error
@@ -41,6 +41,8 @@ type BaseService struct {
 	postRestartHook func()
 }
 
+// NewBaseService constructs a BaseService with the given name, parent context,
+// and options.
 func NewBaseService(name string, ctx context.Context, opts ServiceOptions) *BaseService {
 	bs := &BaseService{
 		name:   name,
@@ -56,6 +58,7 @@ func (bs *BaseService) Name() string {
 	return bs.name
 }
 
+// Options returns a copy of the current ServiceOptions.
 func (bs *BaseService) Options() ServiceOptions {
 	return bs.opts
 }
@@ -65,14 +68,20 @@ func (bs *BaseService) Logger() *dslogger.Logger {
 	return bs.logger
 }
 
-func (bs *BaseService) SetOptions(opts ServiceOptions) {
+// SetOptions replaces the service's options.
+func (bs *BaseService) SetOptions(opts ServiceOptions) error {
 	bs.mu.Lock()
 	defer bs.mu.Unlock()
+	if bs.isRunning() {
+		return fmt.Errorf("cannot change options while service is running")
+	}
 	bs.opts = opts
+	return nil
 }
 
 // SetPreRestartHook registers a function to be called before the process is
-// stopped during a Restart cycle. Only one hook is supported.
+// stopped during a Restart cycle.
+// Only one hook is supported.
 func (bs *BaseService) SetPreRestartHook(fn func()) {
 	bs.mu.Lock()
 	defer bs.mu.Unlock()
@@ -101,7 +110,7 @@ func (bs *BaseService) Start(args []string) error {
 	bs.mu.Lock()
 	defer bs.mu.Unlock()
 
-	if bs.IsRunning() {
+	if bs.isRunning() {
 		return fmt.Errorf("already running")
 	}
 
@@ -115,7 +124,7 @@ func (bs *BaseService) Start(args []string) error {
 	bs.execErr = nil
 
 	// Set up the command
-	cmd := exec.CommandContext(bs.ctx, args[0], args[1:]...)
+	cmd := exec.Command(args[0], args[1:]...)
 	cmd.Dir = bs.Options().WorkingDirectory
 	bs.cmd = cmd
 
@@ -139,6 +148,10 @@ func (bs *BaseService) Start(args []string) error {
 		go bs.monitorAutoRestart()
 	}
 
+	// Snapshot log handlers under the lock before the loop
+	handlers := make([]ServiceLogHandler, len(bs.logHandlers))
+	copy(handlers, bs.logHandlers)
+
 	// Goroutine for real-time log capture and wait for process exit
 	go func() {
 		defer func() {
@@ -158,11 +171,21 @@ func (bs *BaseService) Start(args []string) error {
 			bs.logger.Info(line)
 
 			// Invoke registered log handlers
-			// Avoid scheduling multiple concurrent restarts for the same line
-			for _, h := range bs.logHandlers {
+			// Only the first matching line triggers a restart
+			for _, h := range handlers {
 				if h(line) {
 					bs.logger.Warn("Log handler requested restart", "line", line)
-					go bs.Restart()
+
+					bs.mu.Lock()
+					alreadyStopping := bs.stopping
+					if !alreadyStopping {
+						bs.stopping = true
+					}
+					bs.mu.Unlock()
+
+					if !alreadyStopping {
+						go bs.Restart()
+					}
 					break
 				}
 			}
@@ -177,13 +200,11 @@ func (bs *BaseService) Start(args []string) error {
 
 		// Wait for the process to exit
 		if err := cmd.Wait(); err != nil {
-			if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 0 {
-				bs.logger.Debug("Process exited normally")
-			} else {
-				bs.mu.Lock()
-				bs.execErr = fmt.Errorf("process exited with error: %v", err)
-				bs.mu.Unlock()
-			}
+			bs.mu.Lock()
+			bs.execErr = fmt.Errorf("process exited with error: %v", err)
+			bs.mu.Unlock()
+		} else {
+			bs.logger.Debug("Process exited normally")
 		}
 	}()
 	return nil
@@ -249,17 +270,20 @@ func (bs *BaseService) Stop() error {
 	return nil
 }
 
+// Restart stops the process and starts it again with the same arguments.
 func (bs *BaseService) Restart() {
 	bs.mu.Lock()
 	autoRestart := bs.opts.AutoRestart
 	args := make([]string, len(bs.args))
 	copy(args, bs.args)
-	bs.stopping = true // prevent monitorAutoRestart from racing
+	bs.stopping = true
+	preHook := bs.preRestartHook
+	postHook := bs.postRestartHook
 	bs.mu.Unlock()
 
 	// Allow the embedding service to clean up before the process is stopped
-	if bs.preRestartHook != nil {
-		bs.preRestartHook()
+	if preHook != nil {
+		preHook()
 	}
 
 	if err := bs.Stop(); err != nil {
@@ -289,14 +313,21 @@ func (bs *BaseService) Restart() {
 	}
 
 	// Allow the embedding service to reinitialise after the new process is up
-	if bs.postRestartHook != nil {
-		bs.postRestartHook()
+	if postHook != nil {
+		postHook()
 	}
 }
 
 // Wait waits for the process to exit and returns any execution error.
 func (bs *BaseService) Wait() error {
-	<-bs.done
+	bs.mu.Lock()
+	done := bs.done
+	bs.mu.Unlock()
+
+	if done == nil {
+		return fmt.Errorf("service has not been started")
+	}
+	<-done
 	return bs.execErr
 }
 
@@ -307,12 +338,20 @@ func (bs *BaseService) IsInstalled() bool {
 
 // IsRunning returns true if the service's process is currently alive at the OS level.
 func (bs *BaseService) IsRunning() bool {
-	return bs.cmd != nil && bs.cmd.Process != nil && bs.cmd.ProcessState == nil
+	bs.mu.Lock()
+	defer bs.mu.Unlock()
+	return bs.isRunning()
 }
 
 // IsReady returns true if the service is fully operational.
 func (bs *BaseService) IsReady() bool {
 	return false
+}
+
+// isRunning is the internal, non-locking variant of IsRunning().
+// It must only be called by code that already holds the service mutex (bs.mu).
+func (bs *BaseService) isRunning() bool {
+	return bs.cmd != nil && bs.cmd.Process != nil && bs.cmd.ProcessState == nil
 }
 
 // incrementRestartCount increments the restart counter and reports whether
@@ -340,7 +379,8 @@ func (bs *BaseService) incrementRestartCount() bool {
 	return true
 }
 
-// monitorAutoRestart keeps an eye on the process and restarts it.
+// monitorAutoRestart watches and restarts the process
+// automatically when it exits unexpectedly.
 func (bs *BaseService) monitorAutoRestart() {
 	for {
 		<-bs.done
@@ -363,7 +403,7 @@ func (bs *BaseService) monitorAutoRestart() {
 			return
 		}
 
-		bs.logger.Info(fmt.Sprintf("%s stopped, restarting...", bs.name))
+		bs.logger.Info("Service stopped, restarting...")
 		time.Sleep(bs.opts.RestartDelay)
 
 		if err := bs.Start(args); err != nil {

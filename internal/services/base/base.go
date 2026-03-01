@@ -8,7 +8,6 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
-	"path/filepath"
 	"sync"
 	"syscall"
 	"time"
@@ -19,26 +18,22 @@ import (
 	"github.com/K4rian/kfdsl/internal/log"
 )
 
-// LogHandler is a function that receives each log line from the process.
-// Return true to signal that the service should be restarted.
-type LogHandler func(line string) (shouldRestart bool)
-
 type BaseService struct {
-	name        string
-	rootDir     string
-	autoRestart bool
-	args        []string
-	cmd         *exec.Cmd
-	ctx         context.Context
-	cancel      context.CancelFunc
-	mu          sync.Mutex
-	ptmx        *os.File
-	logger      *dslogger.Logger
-	done        chan struct{}
-	stopping    bool
-	execErr     error
-	startOnce   sync.Once
-	logHandlers []LogHandler
+	name         string
+	opts         ServiceOptions
+	args         []string
+	cmd          *exec.Cmd
+	ctx          context.Context
+	cancel       context.CancelFunc
+	mu           sync.Mutex
+	ptmx         *os.File
+	logger       *dslogger.Logger
+	done         chan struct{}
+	stopping     bool
+	execErr      error
+	startOnce    sync.Once
+	restartCount int
+	logHandlers  []ServiceLogHandler
 
 	// preRestartHook is called before the process is stopped during a restart.
 	preRestartHook func()
@@ -46,11 +41,11 @@ type BaseService struct {
 	postRestartHook func()
 }
 
-func NewBaseService(name string, rootDir string, ctx context.Context) *BaseService {
+func NewBaseService(name string, ctx context.Context, opts ServiceOptions) *BaseService {
 	bs := &BaseService{
-		name:    name,
-		rootDir: rootDir,
-		logger:  log.Logger.WithService(name),
+		name:   name,
+		opts:   opts,
+		logger: log.Logger.WithService(name),
 	}
 	bs.ctx, bs.cancel = context.WithCancel(ctx)
 	return bs
@@ -61,14 +56,19 @@ func (bs *BaseService) Name() string {
 	return bs.name
 }
 
-// RootDirectory returns the service's root directory.
-func (bs *BaseService) RootDirectory() string {
-	return bs.rootDir
+func (bs *BaseService) Options() ServiceOptions {
+	return bs.opts
 }
 
 // Logger returns the service's logger.
 func (bs *BaseService) Logger() *dslogger.Logger {
 	return bs.logger
+}
+
+func (bs *BaseService) SetOptions(opts ServiceOptions) {
+	bs.mu.Lock()
+	defer bs.mu.Unlock()
+	bs.opts = opts
 }
 
 // SetPreRestartHook registers a function to be called before the process is
@@ -90,23 +90,20 @@ func (bs *BaseService) SetPostRestartHook(fn func()) {
 
 // AddLogHandler registers a log handler callback that is called for every
 // line of output produced by the process.
-func (bs *BaseService) AddLogHandler(h LogHandler) {
+func (bs *BaseService) AddLogHandler(h ServiceLogHandler) {
 	bs.mu.Lock()
 	defer bs.mu.Unlock()
 	bs.logHandlers = append(bs.logHandlers, h)
 }
 
 // Start initiates the service's process and manages the start/stop lifecycle.
-func (bs *BaseService) Start(args []string, autoRestart bool) error {
+func (bs *BaseService) Start(args []string) error {
 	bs.mu.Lock()
 	defer bs.mu.Unlock()
 
 	if bs.IsRunning() {
 		return fmt.Errorf("already running")
 	}
-
-	// Store the auto-restart value
-	bs.autoRestart = autoRestart
 
 	// Store the new arguments
 	bs.args = args
@@ -118,12 +115,8 @@ func (bs *BaseService) Start(args []string, autoRestart bool) error {
 	bs.execErr = nil
 
 	// Set up the command
-	execDir := filepath.Dir(args[0])
-	if execDir == "." {
-		execDir = ""
-	}
 	cmd := exec.CommandContext(bs.ctx, args[0], args[1:]...)
-	cmd.Dir = execDir
+	cmd.Dir = bs.Options().WorkingDirectory
 	bs.cmd = cmd
 
 	// Start the process with a pseudo-terminal
@@ -142,7 +135,7 @@ func (bs *BaseService) Start(args []string, autoRestart bool) error {
 	})
 
 	// Goroutine to handle the process auto-restart
-	if bs.autoRestart {
+	if bs.opts.AutoRestart {
 		go bs.monitorAutoRestart()
 	}
 
@@ -228,7 +221,7 @@ func (bs *BaseService) Stop() error {
 	case <-done:
 		bs.logger.Info("Process exited gracefully")
 		return nil
-	case <-time.After(2 * time.Second):
+	case <-time.After(bs.opts.ShutdownTimeout):
 	}
 
 	// Process is still alive, escalate to SIGTERM
@@ -250,7 +243,7 @@ func (bs *BaseService) Stop() error {
 	// Wait for the process to finish after SIGTERM/SIGKILL
 	select {
 	case <-done:
-	case <-time.After(5 * time.Second):
+	case <-time.After(bs.opts.KillTimeout):
 		return fmt.Errorf("process did not exit after SIGTERM/SIGKILL")
 	}
 	return nil
@@ -258,7 +251,7 @@ func (bs *BaseService) Stop() error {
 
 func (bs *BaseService) Restart() {
 	bs.mu.Lock()
-	autoRestart := bs.autoRestart
+	autoRestart := bs.opts.AutoRestart
 	args := make([]string, len(bs.args))
 	copy(args, bs.args)
 	bs.stopping = true // prevent monitorAutoRestart from racing
@@ -281,10 +274,16 @@ func (bs *BaseService) Restart() {
 		return
 	}
 
-	bs.logger.Info("Restarting service...")
-	time.Sleep(2 * time.Second)
+	// Check whether the restart cap has been reached
+	if !bs.incrementRestartCount() {
+		bs.cancel()
+		return
+	}
 
-	if err := bs.Start(args, autoRestart); err != nil {
+	bs.logger.Info("Restarting service...")
+	time.Sleep(bs.opts.RestartDelay)
+
+	if err := bs.Start(args); err != nil {
 		bs.logger.Error("Failed to restart service", "error", err)
 		return
 	}
@@ -316,6 +315,31 @@ func (bs *BaseService) IsReady() bool {
 	return false
 }
 
+// incrementRestartCount increments the restart counter and reports whether
+// another restart is permitted.
+func (bs *BaseService) incrementRestartCount() bool {
+	bs.mu.Lock()
+	defer bs.mu.Unlock()
+
+	bs.restartCount++
+
+	if bs.restartCount > bs.opts.MaxRestarts {
+		bs.logger.Error(
+			"Max restart attempts reached, giving up",
+			"attempt", bs.restartCount,
+			"maxRestarts", bs.opts.MaxRestarts,
+		)
+		return false
+	}
+
+	bs.logger.Info(
+		"Restarting service",
+		"attempt", bs.restartCount,
+		"maxRestarts", bs.opts.MaxRestarts,
+	)
+	return true
+}
+
 // monitorAutoRestart keeps an eye on the process and restarts it.
 func (bs *BaseService) monitorAutoRestart() {
 	for {
@@ -323,7 +347,7 @@ func (bs *BaseService) monitorAutoRestart() {
 
 		bs.mu.Lock()
 		stopping := bs.stopping
-		autoRestart := bs.autoRestart
+		autoRestart := bs.opts.AutoRestart
 		execErr := bs.execErr
 		args := bs.args
 		bs.mu.Unlock()
@@ -332,10 +356,17 @@ func (bs *BaseService) monitorAutoRestart() {
 			return
 		}
 
-		bs.logger.Info(fmt.Sprintf("%s stopped, restarting...", bs.name))
-		time.Sleep(2 * time.Second)
+		// If the restart limit is exhausted,
+		// cancel the context and exit the monitor loop
+		if !bs.incrementRestartCount() {
+			bs.cancel()
+			return
+		}
 
-		if err := bs.Start(args, autoRestart); err != nil {
+		bs.logger.Info(fmt.Sprintf("%s stopped, restarting...", bs.name))
+		time.Sleep(bs.opts.RestartDelay)
+
+		if err := bs.Start(args); err != nil {
 			bs.logger.Error("Failed to restart service", "error", err)
 			return
 		}

@@ -3,12 +3,25 @@ package kfserver
 import (
 	"context"
 	"fmt"
-	"path"
+	"path/filepath"
 	"strings"
 	"sync"
 
 	"github.com/K4rian/kfdsl/internal/services/base"
+	"github.com/K4rian/kfdsl/internal/settings"
 	"github.com/K4rian/kfdsl/internal/utils"
+)
+
+type KFServer struct {
+	*base.BaseService
+	settings   *settings.Settings
+	executable string
+	ready      bool
+	stateMu    sync.RWMutex
+}
+
+const (
+	relExecutablePath = "System/ucc-bin"
 )
 
 // UE2 patterns that indicate a fatal crash
@@ -21,50 +34,30 @@ var crashPatterns = []string{
 	"Signal: SIGSEGV",
 }
 
-type KFServer struct {
-	*base.BaseService
-	configFileName string
-	startupMap     string
-	gameMode       string
-	unsecure       bool
-	maxPlayers     int
-	mutators       string
-	extraArgs      []string
-	executable     string
-	ready          bool
-	stateMu        sync.RWMutex
-}
+func New(ctx context.Context, sett *settings.Settings) *KFServer {
+	rootDir := sett.ServerInstallDir.Value()
+	executable := filepath.Join(rootDir, relExecutablePath)
+	workingDir := filepath.Dir(executable)
 
-func NewKFServer(
-	rootDir string,
-	configFileName string,
-	startupMap string,
-	gameMode string,
-	unsecure bool,
-	maxPlayers int,
-	mutators string,
-	extraArgs []string,
-	ctx context.Context,
-) *KFServer {
 	kfs := &KFServer{
-		BaseService:    base.NewBaseService("KFServer", rootDir, ctx),
-		configFileName: configFileName,
-		startupMap:     startupMap,
-		gameMode:       gameMode,
-		unsecure:       unsecure,
-		maxPlayers:     maxPlayers,
-		mutators:       mutators,
-		extraArgs:      extraArgs,
-		executable:     path.Join(rootDir, "System", "ucc-bin"),
+		BaseService: base.NewBaseService("KFServer", ctx, base.ServiceOptions{
+			RootDirectory:    rootDir,
+			WorkingDirectory: workingDir,
+			AutoRestart:      sett.AutoRestart.Value(),
+			MaxRestarts:      sett.MaxRestarts.Value(),
+			RestartDelay:     sett.RestartDelay.Value(),
+			ShutdownTimeout:  sett.ShutdownTimeout.Value(),
+			KillTimeout:      sett.KillTimeout.Value(),
+		}),
+		settings:   sett,
+		executable: executable,
 	}
 	kfs.AddLogHandler(kfs.handleCrash)
 	return kfs
 }
 
-func (s *KFServer) Start(autoRestart bool) error {
-	args := s.buildCommandLine()
-	err := s.BaseService.Start(args, autoRestart)
-	if err != nil {
+func (s *KFServer) Start() error {
+	if err := s.BaseService.Start(s.buildCommandLine()); err != nil {
 		return err
 	}
 	return nil
@@ -91,35 +84,37 @@ func (s *KFServer) buildCommandLine() []string {
 	var argsBuilder strings.Builder
 
 	// Base command
-	argsBuilder.WriteString(s.startupMap)
+	argsBuilder.WriteString(s.settings.StartupMap.Value())
 	argsBuilder.WriteString(".rom?game=")
-	argsBuilder.WriteString(s.gameMode)
+	argsBuilder.WriteString(s.settings.GameMode.Value())
 	argsBuilder.WriteString("?VACSecured=")
-	argsBuilder.WriteString(fmt.Sprintf("%t", !s.unsecure))
+	argsBuilder.WriteString(fmt.Sprintf("%t", !s.settings.Unsecure.Value()))
 	argsBuilder.WriteString("?MaxPlayers=")
-	argsBuilder.WriteString(fmt.Sprintf("%d", s.maxPlayers))
+	argsBuilder.WriteString(fmt.Sprintf("%d", s.settings.MaxPlayers.Value()))
 
 	// Append Mutator(s) if provided
-	if s.mutators != "" {
+	mutators := strings.TrimSpace(s.settings.Mutators.Value())
+	if s.settings.EnableMutLoader.Value() {
+		mutators = "MutLoader.MutLoader"
+	}
+	if mutators != "" {
 		argsBuilder.WriteString("?Mutator=")
-		argsBuilder.WriteString(s.mutators)
+		argsBuilder.WriteString(mutators)
 	}
 
-	// Specify the configuration file to use
-	iniFile := "ini=" + s.configFileName
-
-	// Final command
+	// Base arguments
 	args := []string{
 		s.executable,
 		"server",
 		argsBuilder.String(),
-		iniFile,
+		"ini=" + s.settings.ConfigFile.Value(),
 		"-nohomedir",
 	}
 
-	// Append extra arguments if provided
-	if len(s.extraArgs) > 0 {
-		args = append(args, s.extraArgs...)
+	// Extra arguments
+	extraArgs := s.settings.ExtraArgs
+	if len(extraArgs) > 0 {
+		args = append(args, extraArgs...)
 	}
 	return args
 }

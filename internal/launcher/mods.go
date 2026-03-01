@@ -4,16 +4,13 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/spf13/viper"
-
 	"github.com/K4rian/kfdsl/internal/log"
 	"github.com/K4rian/kfdsl/internal/mods"
-	"github.com/K4rian/kfdsl/internal/settings"
 	"github.com/K4rian/kfdsl/internal/utils"
 )
 
-func installMods(sett *settings.KFDSLSettings) error {
-	filename := sett.ModsFile.Value()
+func (l *Launcher) installMods() error {
+	filename := l.settings.ModsFile.Value()
 
 	if filename == "" {
 		log.Logger.Info("No mods file specified, skipping mods installation")
@@ -31,7 +28,7 @@ func installMods(sett *settings.KFDSLSettings) error {
 	}
 
 	installed := make([]string, 0)
-	mods.InstallMods(viper.GetString("steamcmd-appinstalldir"), m, &installed)
+	mods.InstallMods(l.settings.ServerInstallDir.Value(), m, &installed)
 
 	log.Logger.Debug("Completed mods installation process")
 	log.Logger.Info("The following mods were installed:", "mods", strings.Join(installed, " / "))

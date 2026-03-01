@@ -53,6 +53,10 @@ const (
 	DefaultLogMaxSize           = 10
 	DefaultLogMaxBackups        = 5
 	DefaultLogMaxAge            = 28
+	DefaultMaxRestarts          = 5
+	DefaultRestartDelay         = 5
+	DefaultShutdownTimeout      = 10
+	DefaultKillTimeout          = 5
 	DefaultSteamLogin           = "anonymous"
 	DefaultSteamPassword        = ""
 )

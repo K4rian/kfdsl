@@ -13,47 +13,42 @@ import (
 	"github.com/K4rian/kfdsl/internal/config/secrets"
 	"github.com/K4rian/kfdsl/internal/log"
 	"github.com/K4rian/kfdsl/internal/services/steamcmd"
-	"github.com/K4rian/kfdsl/internal/settings"
 )
 
-const (
-	KF_APPID = 215360
-)
-
-func startSteamCMD(sett *settings.KFDSLSettings, ctx context.Context) error {
-	rootDir := viper.GetString("steamcmd-root")
-	steamCMD := steamcmd.NewSteamCMD(rootDir, ctx)
+func (l *Launcher) startSteamCMD(ctx context.Context) error {
+	rootDir := l.settings.SteamCMDRoot.Value()
+	steamCMD := steamcmd.New(ctx, rootDir)
 
 	log.Logger.Debug("Initializing SteamCMD",
 		"function", "startSteamCMD", "rootDir", rootDir)
 
 	if !steamCMD.IsInstalled() {
-		return fmt.Errorf("SteamCMD not found in %s. Please install it manually", steamCMD.RootDirectory())
+		return fmt.Errorf("SteamCMD not found in %s. Please install it manually", steamCMD.Options().RootDirectory)
 	}
 
 	// Read Steam Account Credentials
-	if err := readSteamCredentials(sett); err != nil {
+	if err := l.readSteamCredentials(); err != nil {
 		return fmt.Errorf("failed to read Steam credentials: %w", err)
 	}
 
 	// Generate the Steam install script
 	installScript := filepath.Join(rootDir, "kfds_install_script.txt")
-	serverInstallDir := viper.GetString("steamcmd-appinstalldir")
+	serverInstallDir := l.settings.ServerInstallDir.Value()
 
 	log.Logger.Info("Writing the KF Dedicated Server install script...", "scriptPath", installScript)
 	if err := steamCMD.WriteScript(
 		installScript,
-		sett.SteamLogin,
-		sett.SteamPassword,
+		l.settings.SteamLogin,
+		l.settings.SteamPassword,
 		serverInstallDir,
 		KF_APPID,
-		!sett.NoValidate.Value(),
+		!l.settings.NoValidate.Value(),
 	); err != nil {
 		return err
 	}
 	log.Logger.Info("Install script was successfully written", "scriptPath", installScript)
 
-	log.Logger.Info("Starting SteamCMD...", "rootDir", steamCMD.RootDirectory(), "appInstallDir", serverInstallDir)
+	log.Logger.Info("Starting SteamCMD...", "rootDir", steamCMD.Options().RootDirectory, "appInstallDir", serverInstallDir)
 	if err := steamCMD.RunScript(installScript); err != nil && !errors.Is(err, context.Canceled) {
 		return err
 	}
@@ -79,7 +74,7 @@ func startSteamCMD(sett *settings.KFDSLSettings, ctx context.Context) error {
 	return nil
 }
 
-func readSteamCredentials(sett *settings.KFDSLSettings) error {
+func (l *Launcher) readSteamCredentials() error {
 	var fromEnv bool
 
 	defer func() {
@@ -122,7 +117,8 @@ func readSteamCredentials(sett *settings.KFDSLSettings) error {
 	// Update the settings
 	log.Logger.Debug("Successfully retrieved credentials, updating settings",
 		"function", "readSteamCredentials")
-	sett.SteamLogin = steamUsername
-	sett.SteamPassword = steamPassword
+
+	l.settings.SteamLogin = steamUsername
+	l.settings.SteamPassword = steamPassword
 	return nil
 }

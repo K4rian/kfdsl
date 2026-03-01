@@ -8,6 +8,7 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"time"
 )
 
 func ParseNonEmptyStr(a *Argument[string]) (string, error) {
@@ -45,21 +46,35 @@ func ParseIntRange(a *Argument[int], min int, max int) func(a *Argument[int]) (i
 	}
 }
 
+func ParseDuration(a *Argument[time.Duration]) (time.Duration, error) {
+	raw := a.RawValue()
+	if raw < 0 {
+		return 0, fmt.Errorf("invalid %s (%d): value cannot be negative", a.Name(), raw)
+	}
+	// Since Viper returns nanoseconds when using formatted duration, let's reject this use case right away
+	if raw >= time.Second {
+		return 0, fmt.Errorf("invalid %s: use plain integer seconds (e.g. 30), not duration strings", a.Name())
+	}
+	return raw * time.Second, nil
+}
+
 func ParsePort(a *Argument[int]) (int, error) {
 	raw := a.RawValue()
 	if raw < 1024 || raw > 65535 {
-		return 0, fmt.Errorf("invalid %s port (%d): value must be in range 1025-65534", a.Name(), raw)
+		return 0, fmt.Errorf("invalid %s port (%d): value must be in range 1024-65535", a.Name(), raw)
 	}
 	return raw, nil
 }
 
 func ParsePassword(a *Argument[string]) (string, error) {
 	raw := a.RawValue()
-	val := strings.TrimSpace(raw)
-	if val != "" && len(val) > 16 {
+	if strings.ContainsRune(raw, ' ') {
+		return "", fmt.Errorf("invalid %s: value cannot contain spaces", a.Name())
+	}
+	if len(raw) > 16 {
 		return "", fmt.Errorf("invalid %s (%s): value cannot exceed 16 characters", a.Name(), raw)
 	}
-	return val, nil
+	return raw, nil
 }
 
 func ParseURL(a *Argument[string]) (string, error) {
@@ -67,7 +82,7 @@ func ParseURL(a *Argument[string]) (string, error) {
 	val := strings.TrimSpace(raw)
 	if val != "" {
 		parsedURL, err := url.Parse(val)
-		if err != nil || !strings.HasPrefix(parsedURL.Scheme, "http") {
+		if err != nil || !strings.HasPrefix(parsedURL.Scheme, "http") || parsedURL.Host == "" {
 			return "", fmt.Errorf("invalid URL '%s'", raw)
 		}
 	}
@@ -77,11 +92,12 @@ func ParseURL(a *Argument[string]) (string, error) {
 func ParseMail(a *Argument[string]) (string, error) {
 	raw := a.RawValue()
 	val := strings.TrimSpace(strings.ToLower(raw))
-	_, err := mail.ParseAddress(val)
-	if val != "" && err != nil {
-		return "", fmt.Errorf("invalid Email: %s", raw)
+	if val != "" {
+		if _, err := mail.ParseAddress(val); err != nil {
+			return "", fmt.Errorf("invalid Email: %s", raw)
+		}
 	}
-	return raw, nil
+	return val, nil
 }
 
 func ParseIP(a *Argument[string]) (string, error) {
@@ -101,18 +117,20 @@ func ParseIP(a *Argument[string]) (string, error) {
 func ParseExistingDir(a *Argument[string]) (string, error) {
 	raw := a.RawValue()
 	val := strings.TrimSpace(raw)
-	if val != "" {
-		info, err := os.Stat(val)
-		if err != nil {
-			if os.IsNotExist(err) {
-				return "", fmt.Errorf("directory does not exist: '%s'", raw)
-			}
-			return "", fmt.Errorf("error checking directory: '%s': %v", raw, err)
-		}
+	if val == "" {
+		return "", fmt.Errorf("invalid %s: path is empty", a.Name())
+	}
 
-		if !info.IsDir() {
-			return "", fmt.Errorf("path is not a directory: '%s'", raw)
+	info, err := os.Stat(val)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", fmt.Errorf("directory does not exist: '%s'", raw)
 		}
+		return "", fmt.Errorf("error checking directory '%s': %v", raw, err)
+	}
+
+	if !info.IsDir() {
+		return "", fmt.Errorf("path is not a directory: '%s'", raw)
 	}
 	return val, nil
 }

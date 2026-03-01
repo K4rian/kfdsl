@@ -2,7 +2,7 @@ package cmd
 
 import (
 	"os"
-	"path"
+	"path/filepath"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -12,12 +12,21 @@ import (
 	"github.com/K4rian/kfdsl/internal/settings"
 )
 
-func BuildRootCommand() *cobra.Command {
+func BuildRootCommand(sett *settings.Settings) *cobra.Command {
 	rootCmd := &cobra.Command{
 		Use:   "./kfdsl",
 		Short: "KF Dedicated Server Launcher",
 		Long:  "A command-line tool to configure and run a Killing Floor Dedicated Server.",
-		RunE:  runRootCommand,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			registerArguments(sett)
+
+			if err := sett.Parse(); err != nil {
+				return err
+			}
+			viper.SetDefault("KF_EXTRAARGS", args)
+			sett.ExtraArgs = viper.GetStringSlice("KF_EXTRAARGS")
+			return nil
+		},
 	}
 
 	var userHome, _ = os.UserHomeDir()
@@ -28,7 +37,8 @@ func BuildRootCommand() *cobra.Command {
 		logFileFormat, steamRootDir, steamAppInstallDir string
 
 	var gamePort, webadminPort, gamespyPort, maxPlayers, maxSpectators, region,
-		mapVoteRepeatLimit, logMaxSize, logMaxBackups, logMaxAge int
+		mapVoteRepeatLimit, logMaxSize, logMaxBackups, logMaxAge,
+		maxRestarts, restartDelay, shutdownTimeout, killTimeout int
 
 	var friendlyFire float64
 
@@ -94,8 +104,12 @@ func BuildRootCommand() *cobra.Command {
 		"log-max-size":           {&logMaxSize, "max log file size (MB)", settings.DefaultLogMaxSize},
 		"log-max-backups":        {&logMaxBackups, "max number of old log files to keep", settings.DefaultLogMaxBackups},
 		"log-max-age":            {&logMaxAge, "max age of a log file (days)", settings.DefaultLogMaxAge},
-		"steamcmd-root":          {&steamRootDir, "SteamCMD root directory", path.Join(userHome, "steamcmd")},
-		"steamcmd-appinstalldir": {&steamAppInstallDir, "server installatation directory", path.Join(userHome, "gameserver")},
+		"max-restarts":           {&maxRestarts, "max restart attempts in a row", settings.DefaultMaxRestarts},
+		"restart-delay":          {&restartDelay, "delay between restart (in secs)", settings.DefaultRestartDelay},
+		"shutdown-timeout":       {&shutdownTimeout, "server shutdown timeout (in secs)", settings.DefaultShutdownTimeout},
+		"kill-timeout":           {&killTimeout, "server process kill timeout (in secs)", settings.DefaultKillTimeout},
+		"steamcmd-root":          {&steamRootDir, "SteamCMD root directory", filepath.Join(userHome, "steamcmd")},
+		"steamcmd-appinstalldir": {&steamAppInstallDir, "server installatation directory", filepath.Join(userHome, "gameserver")},
 	}
 
 	for flag, data := range flags {
@@ -137,73 +151,65 @@ func BuildRootCommand() *cobra.Command {
 	return rootCmd
 }
 
-func runRootCommand(cmd *cobra.Command, args []string) error {
-	sett := settings.Get()
-
-	registerArguments(sett)
-
-	if err := sett.Parse(); err != nil {
-		return err
-	}
-
-	viper.SetDefault("KF_EXTRAARGS", args)
-	sett.ExtraArgs = viper.GetStringSlice("KF_EXTRAARGS")
-	return nil
-}
-
-func registerArguments(sett *settings.KFDSLSettings) {
-	sett.ConfigFile = arguments.NewArgument("Config File", viper.GetString("config"), nil, nil, false)
-	sett.ModsFile = arguments.NewArgument("Mods File", viper.GetString("mods"), nil, nil, false)
-	sett.ServerName = arguments.NewArgument("Server Name", viper.GetString("servername"), arguments.ParseNonEmptyStr, nil, false)
-	sett.ShortName = arguments.NewArgument("Short Name", viper.GetString("shortname"), arguments.ParseNonEmptyStr, nil, false)
-	sett.GamePort = arguments.NewArgument("Game Port", viper.GetInt("port"), arguments.ParsePort, nil, false)
-	sett.WebAdminPort = arguments.NewArgument("WebAdmin Port", viper.GetInt("webadminport"), arguments.ParsePort, nil, false)
-	sett.GameSpyPort = arguments.NewArgument("GameSpy Port", viper.GetInt("gamespyport"), arguments.ParsePort, nil, false)
-	sett.GameMode = arguments.NewArgument("Game Mode", viper.GetString("gamemode"), arguments.ParseGameMode, arguments.FormatGameMode, false)
-	sett.StartupMap = arguments.NewArgument("Startup Map", viper.GetString("map"), arguments.ParseNonEmptyStr, nil, false)
-	sett.GameDifficulty = arguments.NewArgument("Game Difficulty", settings.DefaultInternalGameDifficulty, arguments.ParseGameDifficulty(viper.GetString("difficulty")), arguments.FormatGameDifficulty, false)
-	sett.GameLength = arguments.NewArgument("Game Length", settings.DefaultInternalGameLength, arguments.ParseGameLength(viper.GetString("length")), arguments.FormatGameLength, false)
-	sett.FriendlyFire = arguments.NewArgument("Friendly Fire Rate", viper.GetFloat64("friendlyfire"), arguments.ParseFriendlyFireRate, arguments.FormatFriendlyFireRate, false)
-	sett.MaxPlayers = arguments.NewArgument("Max Players", viper.GetInt("maxplayers"), nil, nil, false)
-	sett.MaxSpectators = arguments.NewArgument("Max Spectators", viper.GetInt("maxspectators"), nil, nil, false)
-	sett.Password = arguments.NewArgument("Game Password", viper.GetString("password"), arguments.ParsePassword, nil, true)
-	sett.Region = arguments.NewArgument("Region", viper.GetInt("region"), arguments.ParseUnsignedInt, nil, false)
-	sett.AdminName = arguments.NewArgument("Admin Name", viper.GetString("adminname"), nil, nil, false)
-	sett.AdminMail = arguments.NewArgument("Admin Mail", viper.GetString("adminmail"), arguments.ParseMail, nil, true)
-	sett.AdminPassword = arguments.NewArgument("Admin Password", viper.GetString("adminpassword"), arguments.ParsePassword, nil, true)
-	sett.MOTD = arguments.NewArgument("MOTD", viper.GetString("motd"), nil, nil, false)
-	sett.SpecimenType = arguments.NewArgument("Specimens Type", viper.GetString("specimentype"), arguments.ParseSpecimenType, arguments.FormatSpecimenType, false)
-	sett.Mutators = arguments.NewArgument("Mutators", viper.GetString("mutators"), nil, nil, false)
-	sett.ServerMutators = arguments.NewArgument("Server Mutators", viper.GetString("servermutators"), nil, nil, false)
-	sett.RedirectURL = arguments.NewArgument("Redirect URL", viper.GetString("redirecturl"), arguments.ParseURL, nil, false)
-	sett.Maplist = arguments.NewArgument("Maplist", viper.GetString("maplist"), nil, nil, false)
-	sett.EnableWebAdmin = arguments.NewArgument("Web Admin", viper.GetBool("webadmin"), nil, arguments.FormatBool, false)
-	sett.EnableMapVote = arguments.NewArgument("Map Voting", viper.GetBool("mapvote"), nil, arguments.FormatBool, false)
-	sett.MapVoteRepeatLimit = arguments.NewArgument("Map Vote Repeat Limit", viper.GetInt("mapvote-repeatlimit"), arguments.ParseUnsignedInt, nil, false)
-	sett.EnableAdminPause = arguments.NewArgument("Admin Pause", viper.GetBool("adminpause"), nil, arguments.FormatBool, false)
-	sett.DisableWeaponThrow = arguments.NewArgument("No Weapon Throw", viper.GetBool("noweaponthrow"), nil, arguments.FormatBool, false)
-	sett.DisableWeaponShake = arguments.NewArgument("No Weapon Shake", viper.GetBool("noweaponshake"), nil, arguments.FormatBool, false)
-	sett.EnableThirdPerson = arguments.NewArgument("Third Person View", viper.GetBool("thirdperson"), nil, arguments.FormatBool, false)
-	sett.EnableLowGore = arguments.NewArgument("Low Gore", viper.GetBool("lowgore"), nil, arguments.FormatBool, false)
-	sett.Uncap = arguments.NewArgument("Uncap Framerate", viper.GetBool("uncap"), nil, arguments.FormatBool, false)
-	sett.Unsecure = arguments.NewArgument("Unsecure (no VAC)", viper.GetBool("unsecure"), nil, arguments.FormatBool, false)
-	sett.NoSteam = arguments.NewArgument("Skip SteamCMD", viper.GetBool("nosteam"), nil, arguments.FormatBool, false)
-	sett.NoValidate = arguments.NewArgument("Files Validation", viper.GetBool("novalidate"), nil, arguments.FormatBool, false)
-	sett.AutoRestart = arguments.NewArgument("Server Auto Restart", viper.GetBool("autorestart"), nil, arguments.FormatBool, false)
-	sett.EnableMutLoader = arguments.NewArgument("Use MutLoader", viper.GetBool("mutloader"), nil, arguments.FormatBool, false)
-	sett.EnableKFPatcher = arguments.NewArgument("Use KFPatcher", viper.GetBool("kfpatcher"), nil, arguments.FormatBool, false)
-	sett.KFPHidePerks = arguments.NewArgument("KFP Hide Perks", viper.GetBool("hideperks"), nil, arguments.FormatBool, false)
-	sett.KFPDisableZedTime = arguments.NewArgument("KFP Disable ZED Time", viper.GetBool("nozedtime"), nil, arguments.FormatBool, false)
-	sett.KFPBuyEverywhere = arguments.NewArgument("KFP Buy Everywhere", viper.GetBool("buyeverywhere"), nil, arguments.FormatBool, false)
-	sett.KFPEnableAllTraders = arguments.NewArgument("KFP All Traders", viper.GetBool("alltraders"), nil, arguments.FormatBool, false)
-	sett.KFPAllTradersMessage = arguments.NewArgument("KFP All Traders Msg", viper.GetString("alltraders-message"), nil, nil, false)
-	sett.LogToFile = arguments.NewArgument("Log to File", viper.GetBool("log-to-file"), nil, arguments.FormatBool, false)
-	sett.LogLevel = arguments.NewArgument("Log Level", viper.GetString("log-level"), arguments.ParseLogLevel, nil, false)
-	sett.LogFile = arguments.NewArgument("Log File", viper.GetString("log-file"), nil, nil, false)
-	sett.LogFileFormat = arguments.NewArgument("Log File Format", viper.GetString("log-file-format"), arguments.ParseLogFileFormat, nil, false)
-	sett.LogMaxSize = arguments.NewArgument("Log Max Size (MB)", viper.GetInt("log-max-size"), arguments.ParsePositiveInt, nil, false)
-	sett.LogMaxBackups = arguments.NewArgument("Log Max Backups", viper.GetInt("log-max-backups"), arguments.ParsePositiveInt, nil, false)
-	sett.LogMaxAge = arguments.NewArgument("Log Max Age (days)", viper.GetInt("log-max-age"), arguments.ParsePositiveInt, nil, false)
+func registerArguments(sett *settings.Settings) {
+	sett.ConfigFile = arguments.New("Config File", viper.GetString("config"), nil, nil, false)
+	sett.ModsFile = arguments.New("Mods File", viper.GetString("mods"), nil, nil, false)
+	sett.ServerName = arguments.New("Server Name", viper.GetString("servername"), arguments.ParseNonEmptyStr, nil, false)
+	sett.ShortName = arguments.New("Short Name", viper.GetString("shortname"), arguments.ParseNonEmptyStr, nil, false)
+	sett.GamePort = arguments.New("Game Port", viper.GetInt("port"), arguments.ParsePort, nil, false)
+	sett.WebAdminPort = arguments.New("WebAdmin Port", viper.GetInt("webadminport"), arguments.ParsePort, nil, false)
+	sett.GameSpyPort = arguments.New("GameSpy Port", viper.GetInt("gamespyport"), arguments.ParsePort, nil, false)
+	sett.GameMode = arguments.New("Game Mode", viper.GetString("gamemode"), arguments.ParseGameMode, arguments.FormatGameMode, false)
+	sett.StartupMap = arguments.New("Startup Map", viper.GetString("map"), arguments.ParseNonEmptyStr, nil, false)
+	sett.GameDifficulty = arguments.New("Game Difficulty", settings.DefaultInternalGameDifficulty, arguments.ParseGameDifficulty(viper.GetString("difficulty")), arguments.FormatGameDifficulty, false)
+	sett.GameLength = arguments.New("Game Length", settings.DefaultInternalGameLength, arguments.ParseGameLength(viper.GetString("length")), arguments.FormatGameLength, false)
+	sett.FriendlyFire = arguments.New("Friendly Fire Rate", viper.GetFloat64("friendlyfire"), arguments.ParseFriendlyFireRate, arguments.FormatFriendlyFireRate, false)
+	sett.MaxPlayers = arguments.New("Max Players", viper.GetInt("maxplayers"), nil, nil, false)
+	sett.MaxSpectators = arguments.New("Max Spectators", viper.GetInt("maxspectators"), nil, nil, false)
+	sett.Password = arguments.New("Game Password", viper.GetString("password"), arguments.ParsePassword, nil, true)
+	sett.Region = arguments.New("Region", viper.GetInt("region"), arguments.ParseUnsignedInt, nil, false)
+	sett.AdminName = arguments.New("Admin Name", viper.GetString("adminname"), nil, nil, false)
+	sett.AdminMail = arguments.New("Admin Mail", viper.GetString("adminmail"), arguments.ParseMail, nil, true)
+	sett.AdminPassword = arguments.New("Admin Password", viper.GetString("adminpassword"), arguments.ParsePassword, nil, true)
+	sett.MOTD = arguments.New("MOTD", viper.GetString("motd"), nil, nil, false)
+	sett.SpecimenType = arguments.New("Specimens Type", viper.GetString("specimentype"), arguments.ParseSpecimenType, arguments.FormatSpecimenType, false)
+	sett.Mutators = arguments.New("Mutators", viper.GetString("mutators"), nil, nil, false)
+	sett.ServerMutators = arguments.New("Server Mutators", viper.GetString("servermutators"), nil, nil, false)
+	sett.RedirectURL = arguments.New("Redirect URL", viper.GetString("redirecturl"), arguments.ParseURL, nil, false)
+	sett.Maplist = arguments.New("Maplist", viper.GetString("maplist"), nil, nil, false)
+	sett.EnableWebAdmin = arguments.New("Web Admin", viper.GetBool("webadmin"), nil, arguments.FormatBool, false)
+	sett.EnableMapVote = arguments.New("Map Voting", viper.GetBool("mapvote"), nil, arguments.FormatBool, false)
+	sett.MapVoteRepeatLimit = arguments.New("Map Vote Repeat Limit", viper.GetInt("mapvote-repeatlimit"), arguments.ParseUnsignedInt, nil, false)
+	sett.EnableAdminPause = arguments.New("Admin Pause", viper.GetBool("adminpause"), nil, arguments.FormatBool, false)
+	sett.DisableWeaponThrow = arguments.New("No Weapon Throw", viper.GetBool("noweaponthrow"), nil, arguments.FormatBool, false)
+	sett.DisableWeaponShake = arguments.New("No Weapon Shake", viper.GetBool("noweaponshake"), nil, arguments.FormatBool, false)
+	sett.EnableThirdPerson = arguments.New("Third Person View", viper.GetBool("thirdperson"), nil, arguments.FormatBool, false)
+	sett.EnableLowGore = arguments.New("Low Gore", viper.GetBool("lowgore"), nil, arguments.FormatBool, false)
+	sett.Uncap = arguments.New("Uncap Framerate", viper.GetBool("uncap"), nil, arguments.FormatBool, false)
+	sett.Unsecure = arguments.New("Unsecure (no VAC)", viper.GetBool("unsecure"), nil, arguments.FormatBool, false)
+	sett.NoSteam = arguments.New("Skip SteamCMD", viper.GetBool("nosteam"), nil, arguments.FormatBool, false)
+	sett.NoValidate = arguments.New("Files Validation", viper.GetBool("novalidate"), nil, arguments.FormatBool, false)
+	sett.AutoRestart = arguments.New("Server Auto Restart", viper.GetBool("autorestart"), nil, arguments.FormatBool, false)
+	sett.EnableMutLoader = arguments.New("Use MutLoader", viper.GetBool("mutloader"), nil, arguments.FormatBool, false)
+	sett.EnableKFPatcher = arguments.New("Use KFPatcher", viper.GetBool("kfpatcher"), nil, arguments.FormatBool, false)
+	sett.KFPHidePerks = arguments.New("KFP Hide Perks", viper.GetBool("hideperks"), nil, arguments.FormatBool, false)
+	sett.KFPDisableZedTime = arguments.New("KFP Disable ZED Time", viper.GetBool("nozedtime"), nil, arguments.FormatBool, false)
+	sett.KFPBuyEverywhere = arguments.New("KFP Buy Everywhere", viper.GetBool("buyeverywhere"), nil, arguments.FormatBool, false)
+	sett.KFPEnableAllTraders = arguments.New("KFP All Traders", viper.GetBool("alltraders"), nil, arguments.FormatBool, false)
+	sett.KFPAllTradersMessage = arguments.New("KFP All Traders Msg", viper.GetString("alltraders-message"), nil, nil, false)
+	sett.LogToFile = arguments.New("Log to File", viper.GetBool("log-to-file"), nil, arguments.FormatBool, false)
+	sett.LogLevel = arguments.New("Log Level", viper.GetString("log-level"), arguments.ParseLogLevel, nil, false)
+	sett.LogFile = arguments.New("Log File", viper.GetString("log-file"), nil, nil, false)
+	sett.LogFileFormat = arguments.New("Log File Format", viper.GetString("log-file-format"), arguments.ParseLogFileFormat, nil, false)
+	sett.LogMaxSize = arguments.New("Log Max Size (MB)", viper.GetInt("log-max-size"), arguments.ParsePositiveInt, nil, false)
+	sett.LogMaxBackups = arguments.New("Log Max Backups", viper.GetInt("log-max-backups"), arguments.ParsePositiveInt, nil, false)
+	sett.LogMaxAge = arguments.New("Log Max Age (days)", viper.GetInt("log-max-age"), arguments.ParsePositiveInt, nil, false)
+	sett.MaxRestarts = arguments.New("Max Restarts", viper.GetInt("max-restarts"), arguments.ParseUnsignedInt, nil, false)
+	sett.RestartDelay = arguments.New("Restart Delay (secs)", viper.GetDuration("restart-delay"), arguments.ParseDuration, nil, false)
+	sett.ShutdownTimeout = arguments.New("Shutdown Timeout (secs)", viper.GetDuration("shutdown-timeout"), arguments.ParseDuration, nil, false)
+	sett.KillTimeout = arguments.New("Kill Timeout (secs)", viper.GetDuration("kill-timeout"), arguments.ParseDuration, nil, false)
+	sett.SteamCMDRoot = arguments.New("SteamCMD Root", viper.GetString("steamcmd-root"), arguments.ParseExistingDir, nil, false)
+	sett.ServerInstallDir = arguments.New("Server Install Dir", viper.GetString("steamcmd-appinstalldir"), arguments.ParseExistingDir, nil, false)
 
 	sett.MaxPlayers.SetParserFunction(arguments.ParseIntRange(sett.MaxPlayers, 0, 32))
 	sett.MaxSpectators.SetParserFunction(arguments.ParseIntRange(sett.MaxSpectators, 0, 32))

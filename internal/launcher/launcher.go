@@ -14,46 +14,54 @@ import (
 	"github.com/K4rian/kfdsl/internal/settings"
 )
 
-func Run() {
-	// Build the root command and execute it
-	rootCmd := cmd.BuildRootCommand()
-	if err := rootCmd.Execute(); err != nil {
-		os.Exit(1)
-	}
+type Launcher struct {
+	settings *settings.Settings
+}
 
-	// Get the settings
-	sett := settings.Get()
+func New() *Launcher {
+	return &Launcher{
+		settings: &settings.Settings{},
+	}
+}
+
+func (l *Launcher) Run() error {
+	// Build the root command and execute it
+	rootCmd := cmd.BuildRootCommand(l.settings)
+	if err := rootCmd.Execute(); err != nil {
+		return err
+	}
 
 	// Init the logger
 	if err := log.Init(
-		sett.LogLevel.Value(),
-		sett.LogFile.Value(),
-		sett.LogFileFormat.Value(),
-		sett.LogMaxSize.Value(),
-		sett.LogMaxBackups.Value(),
-		sett.LogMaxAge.Value(),
-		sett.LogToFile.Value(),
+		l.settings.LogLevel.Value(),
+		l.settings.LogFile.Value(),
+		l.settings.LogFileFormat.Value(),
+		l.settings.LogMaxSize.Value(),
+		l.settings.LogMaxBackups.Value(),
+		l.settings.LogMaxAge.Value(),
+		l.settings.LogToFile.Value(),
 	); err != nil {
-		fmt.Printf("ERROR: Failed to init the logger: %v", err)
-		os.Exit(1)
+		return fmt.Errorf("failed to init the logger: %v", err)
 	}
 	log.Logger.Debug("Log system initialized",
 		"function", "Run")
 
 	// Create a cancel context
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	signalChan := make(chan os.Signal, 1)
 	signal.Notify(signalChan, os.Interrupt, syscall.SIGTERM)
 
 	// Print all settings
-	sett.Print()
+	l.settings.Print()
 
 	// Start SteamCMD, if enabled
-	if !sett.NoSteam.Value() {
+	if !l.settings.NoSteam.Value() {
 		start := time.Now()
-		if err := startSteamCMD(sett, ctx); err != nil {
-			log.Logger.Error("SteamCMD raised an error", "error", err)
-			os.Exit(1)
+		if err := l.startSteamCMD(ctx); err != nil {
+			// log.Logger.Error("SteamCMD raised an error", "error", err)
+			return fmt.Errorf("steamcmd raises an error: %w", err)
 		}
 		log.Logger.Debug("SteamCMD process completed",
 			"function", "Run", "elapsedTime", time.Since(start))
@@ -67,7 +75,6 @@ func Run() {
 
 	defer func() {
 		log.Logger.Info("Shutting down the KF Dedicated Server...")
-		cancel()
 
 		if server != nil && server.IsRunning() {
 			log.Logger.Debug("Waiting for the KF Dedicated Server to stop...",
@@ -83,13 +90,17 @@ func Run() {
 
 	// Start the Killing Floor Dedicated Server
 	startTime = time.Now()
-	server, err := startGameServer(sett, ctx)
+	server, err := l.startGameServer(ctx)
 	if err != nil {
 		log.Logger.Error("KF Dedicated Server raised an error", "error", err)
 	}
 
 	<-signalChan
 	signal.Stop(signalChan)
+	cancel()
+
 	log.Logger.Debug("Program finished, exiting now...",
 		"function", "Run")
+
+	return nil
 }

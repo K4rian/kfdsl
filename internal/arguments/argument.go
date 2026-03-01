@@ -27,7 +27,7 @@ type Argument[T any] struct {
 	sensitive      bool              // True if the argument contains sensitive data
 }
 
-func NewArgument[T any](name string, rawValue T, parseFunc ParseFunction[T], formatFunc FormatFunction[T], sensitive bool) *Argument[T] {
+func New[T any](name string, rawValue T, parseFunc ParseFunction[T], formatFunc FormatFunction[T], sensitive bool) *Argument[T] {
 	if parseFunc == nil {
 		parseFunc = defaultParser[T]
 	}

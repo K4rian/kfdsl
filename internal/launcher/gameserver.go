@@ -3,75 +3,60 @@ package launcher
 import (
 	"context"
 	"fmt"
-	"path"
 	"path/filepath"
-
-	"github.com/spf13/viper"
 
 	"github.com/K4rian/kfdsl/internal/log"
 	"github.com/K4rian/kfdsl/internal/services/kfserver"
-	"github.com/K4rian/kfdsl/internal/settings"
 	"github.com/K4rian/kfdsl/internal/utils"
 )
 
-func startGameServer(sett *settings.KFDSLSettings, ctx context.Context) (*kfserver.KFServer, error) {
-	mutators := sett.Mutators.Value()
-	if sett.EnableMutLoader.Value() {
+func (l *Launcher) startGameServer(ctx context.Context) (*kfserver.KFServer, error) {
+	mutators := l.settings.Mutators.Value()
+	if l.settings.EnableMutLoader.Value() {
 		mutators = "MutLoader.MutLoader"
 	}
 
-	rootDir := viper.GetString("steamcmd-appinstalldir")
-	configFileName := sett.ConfigFile.Value()
-	startupMap := sett.StartupMap.Value()
-	gameMode := sett.GameMode.Value()
-	unsecure := sett.Unsecure.Value()
-	maxPlayers := sett.MaxPlayers.Value()
-	extraArgs := viper.GetStringSlice("KF_EXTRAARGS")
-
-	gameServer := kfserver.NewKFServer(
-		rootDir,
-		configFileName,
-		startupMap,
-		gameMode,
-		unsecure,
-		maxPlayers,
-		mutators,
-		extraArgs,
-		ctx,
-	)
+	rootDir := l.settings.ServerInstallDir.Value()
+	configFileName := l.settings.ConfigFile.Value()
+	gameServer := kfserver.New(ctx, l.settings)
 
 	log.Logger.Debug("Initializing KF Dedicated Server",
-		"function", "startGameServer", "rootDir", rootDir, "startupMap", startupMap,
-		"gameMode", gameMode, "unsecure", unsecure, "maxPlayers", maxPlayers,
-		"mutators", mutators, "extraArgs", extraArgs,
+		"function", "startGameServer",
+		"rootDir", rootDir,
+		"startupMap", l.settings.StartupMap.Value(),
+		"gameMode", l.settings.GameMode.Value(),
+		"unsecure", l.settings.Unsecure.Value(),
+		"maxPlayers", l.settings.MaxPlayers.Value(),
+		"mutators", mutators,
+		"extraArgs", l.settings.ExtraArgs,
 	)
 
 	if !gameServer.IsInstalled() {
-		return nil, fmt.Errorf("unable to locate the KF Dedicated Server files in '%s', please install using SteamCMD", gameServer.RootDirectory())
+		return nil, fmt.Errorf("unable to locate the KF Dedicated Server files in '%s', please install using SteamCMD", gameServer.Options().RootDirectory)
 	}
 
 	log.Logger.Info("Updating the KF Dedicated Server configuration file...", "file", configFileName)
-	if err := updateConfigFile(sett); err != nil {
+	if err := l.updateConfigFile(); err != nil {
 		return nil, fmt.Errorf("failed to update the KF Dedicated Server configuration file %s: %w", configFileName, err)
 	}
 	log.Logger.Info("Server configuration file successfully updated", "file", configFileName)
 
-	if err := installMods(sett); err != nil {
-		log.Logger.Error("Failed to install mods", "file", sett.ModsFile.Value(), "error", err)
+	if err := l.installMods(); err != nil {
+		log.Logger.Error("Failed to install mods", "file", l.settings.ModsFile.Value(), "error", err)
 		return nil, fmt.Errorf("failed to install mods: %w", err)
 	}
 
-	if sett.EnableKFPatcher.Value() {
+	if l.settings.EnableKFPatcher.Value() {
 		kfpConfigFilePath := filepath.Join(rootDir, "System", "KFPatcherSettings.ini")
 		log.Logger.Info("Updating the KFPatcher configuration file...", "file", kfpConfigFilePath)
-		if err := updateKFPatcherConfigFile(sett); err != nil {
+		if err := l.updateKFPatcherConfigFile(); err != nil {
 			return nil, fmt.Errorf("failed to update the KFPatcher configuration file %s: %w", kfpConfigFilePath, err)
 		}
 		log.Logger.Info("KFPatcher configuration file successfully updated", "file", kfpConfigFilePath)
 	}
 
 	log.Logger.Info("Verifying KF Dedicated Server Steam libraries for updates...")
-	updatedLibs, err := updateGameServerSteamLibs()
+	updatedLibs, err := l.updateGameServerSteamLibs()
 	if err == nil {
 		if len(updatedLibs) > 0 {
 			for _, lib := range updatedLibs {
@@ -84,26 +69,26 @@ func startGameServer(sett *settings.KFDSLSettings, ctx context.Context) (*kfserv
 		log.Logger.Error("Unable to update the KF Dedicated Server Steam libraries", "error", err)
 	}
 
-	log.Logger.Info("Starting the KF Dedicated Server...", "rootDir", gameServer.RootDirectory(), "autoRestart", sett.AutoRestart.Value())
-	if err := gameServer.Start(sett.AutoRestart.Value()); err != nil {
+	log.Logger.Info("Starting the KF Dedicated Server...", "rootDir", gameServer.Options().RootDirectory, "autoRestart", l.settings.AutoRestart.Value())
+	if err := gameServer.Start(); err != nil {
 		return nil, fmt.Errorf("failed to start the KF Dedicated Server: %w", err)
 	}
 	return gameServer, nil
 }
 
-func updateGameServerSteamLibs() ([]string, error) {
+func (l *Launcher) updateGameServerSteamLibs() ([]string, error) {
 	ret := []string{}
-	rootDir := viper.GetString("steamcmd-appinstalldir")
-	systemDir := path.Join(rootDir, "System")
-	libsDir := path.Join(viper.GetString("steamcmd-root"), "linux32")
+	rootDir := l.settings.ServerInstallDir.Value()
+	systemDir := filepath.Join(rootDir, "System")
+	libsDir := filepath.Join(l.settings.SteamCMDRoot.Value(), "linux32")
 
 	log.Logger.Debug("Starting server Steam libraries update",
 		"function", "updateGameServerSteamLibs", "rootDir", rootDir, "systemDir", systemDir, "libsDir", libsDir)
 
 	libs := map[string]string{
-		path.Join(libsDir, "steamclient.so"):  path.Join(systemDir, "steamclient.so"),
-		path.Join(libsDir, "libtier0_s.so"):   path.Join(systemDir, "libtier0_s.so"),
-		path.Join(libsDir, "libvstdlib_s.so"): path.Join(systemDir, "libvstdlib_s.so"),
+		filepath.Join(libsDir, "steamclient.so"):  filepath.Join(systemDir, "steamclient.so"),
+		filepath.Join(libsDir, "libtier0_s.so"):   filepath.Join(systemDir, "libtier0_s.so"),
+		filepath.Join(libsDir, "libvstdlib_s.so"): filepath.Join(systemDir, "libvstdlib_s.so"),
 	}
 
 	for srcFile, dstFile := range libs {
